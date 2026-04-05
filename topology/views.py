@@ -7,8 +7,19 @@ from .snmp import (
     fallback_discover_access_port,
     is_link_up,
     poll_device,
+    poll_host_metrics,
     poll_link_side,
 )
+
+def build_laptop_host_metrics(community: str) -> dict:
+    laptop = poll_device(settings.LAPTOP_IP, community)
+    laptop["host_metrics"] = poll_host_metrics(
+        settings.LAPTOP_IP,
+        community,
+        wifi_token=getattr(settings, "LAPTOP_WIFI_EXTEND_TOKEN", "wifi_info"),
+        gpu_token=getattr(settings, "LAPTOP_GPU_EXTEND_TOKEN", "gpu_info"),
+    )
+    return laptop
 
 @api_view(["GET"])
 def topology_view(request):
@@ -16,7 +27,7 @@ def topology_view(request):
 
     router = poll_device(settings.ROUTER_IP, community)
     switch = poll_device(settings.SWITCH_IP, community)
-    laptop = poll_device(settings.LAPTOP_IP, community)
+    laptop = build_laptop_host_metrics(community)
 
     router_to_switch_router_side = poll_link_side(
         settings.ROUTER_IP, community, settings.ROUTER_TO_SWITCH_ROUTER_PORT_INDEX
@@ -107,4 +118,14 @@ def topology_view(request):
             "offline_nodes": sum(1 for n in [router, switch, laptop] if n["status"] != "up"),
             "active_links": sum(1 for s in [router_switch_up, switch_laptop_up] if s),
         },
+    })
+
+@api_view(["GET"])
+def host_metrics_view(request):
+    community = settings.SNMP_COMMUNITY
+    laptop = build_laptop_host_metrics(community)
+
+    return Response({
+        "node": laptop,
+        "host_metrics": laptop["host_metrics"],
     })

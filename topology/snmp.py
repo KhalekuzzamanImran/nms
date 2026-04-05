@@ -5,6 +5,8 @@ from typing import Dict, List, Optional, Tuple
 
 SNMP_TIMEOUT = "2"
 SNMP_RETRIES = "0"
+HOST_RESOURCES_FIXED_DISK = "1.3.6.1.2.1.25.2.1.4"
+NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.1.2"
 
 @dataclass
 class SnmpResult:
@@ -63,6 +65,13 @@ def extract_timeticks_text(snmp_value: Optional[str]) -> Optional[str]:
         return None
     match = re.search(r"\)\s*(.*)$", snmp_value)
     return match.group(1).strip() if match else snmp_value
+
+def extract_float(snmp_value: Optional[str]) -> Optional[float]:
+    if not snmp_value:
+        return None
+    tail = snmp_value.split(":", 1)[1].strip() if ":" in snmp_value else snmp_value.strip()
+    match = re.search(r"(-?\d+(?:\.\d+)?)", tail)
+    return float(match.group(1)) if match else None
 
 def oper_label(value: Optional[int]) -> str:
     return {
@@ -135,6 +144,39 @@ def parse_walk_map(lines: List[str]) -> Dict[str, str]:
 def normalize_mac(mac: str) -> str:
     return mac.replace("-", ":").replace(" ", ":").lower()
 
+def walk_suffix_map(ip: str, community: str, oid: str) -> Dict[str, str]:
+    prefix = f".{oid}."
+    result = {}
+    for full_oid, value in parse_walk_map(run_snmpwalk(ip, community, oid, numeric=True)).items():
+        if full_oid.startswith(prefix):
+            result[full_oid[len(prefix):]] = value
+    return result
+
+def extend_output_oid(token: str) -> str:
+    encoded = ".".join(str(ord(char)) for char in token)
+    return f"{NS_EXTEND_OUTPUT1_BASE}.{len(token)}.{encoded}"
+
+def parse_key_value_text(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    text = extract_string(raw) or raw
+    pairs = {}
+    for chunk in re.split(r"[;,]\s*", text):
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        pairs[key.strip()] = value.strip()
+    return pairs
+
+def parse_maybe_number(value: Optional[str]):
+    if value is None:
+        return None
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        return float(value)
+    return value
+
 def value_to_mac(value: str) -> Optional[str]:
     if not value:
         return None
@@ -151,18 +193,15 @@ def value_to_mac(value: str) -> Optional[str]:
     return None
 
 def get_laptop_active_interface(ip: str, community: str) -> Optional[dict]:
-    names = parse_walk_map(run_snmpwalk(ip, community, "1.3.6.1.2.1.31.1.1.1.1"))
-    oper = parse_walk_map(run_snmpwalk(ip, community, "1.3.6.1.2.1.2.2.1.8"))
-    macs = parse_walk_map(run_snmpwalk(ip, community, "1.3.6.1.2.1.2.2.1.6", numeric=True))
+    names = walk_suffix_map(ip, community, "1.3.6.1.2.1.31.1.1.1.1")
+    oper = walk_suffix_map(ip, community, "1.3.6.1.2.1.2.2.1.8")
+    macs = walk_suffix_map(ip, community, "1.3.6.1.2.1.2.2.1.6")
     candidates = []
-    for oid, raw_name in names.items():
-        idx = oid.split(".")[-1]
+    for idx, raw_name in names.items():
         name = extract_string(raw_name)
-        oper_oid = f"IF-MIB::ifOperStatus.{idx}"
-        oper_value = oper.get(oper_oid)
+        oper_value = oper.get(idx)
         oper_num = extract_integer(oper_value) if oper_value else None
-        mac_oid = f".1.3.6.1.2.1.2.2.1.6.{idx}"
-        mac_value = macs.get(mac_oid)
+        mac_value = macs.get(idx)
         mac = value_to_mac(mac_value) if mac_value else None
 
         if not name or name == "lo":
@@ -180,57 +219,158 @@ def discover_switch_port_for_laptop(switch_ip: str, laptop_ip: str, community: s
         return None
     laptop_mac = laptop_iface["mac"]
 
-    base_port_to_ifindex = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.17.1.4.1.2", numeric=True))
-    fdb_addr = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.17.4.3.1.1", numeric=True))
-    fdb_port = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.17.4.3.1.2", numeric=True))
+    base_port_to_ifindex = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.17.1.4.1.2")
+    fdb_addr = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.17.4.3.1.1")
+    fdb_port = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.17.4.3.1.2")
 
     suffix_to_mac = {}
-    prefix_addr = ".1.3.6.1.2.1.17.4.3.1.1."
-    for oid, value in fdb_addr.items():
-        if oid.startswith(prefix_addr):
-            suffix = oid[len(prefix_addr):]
-            mac = value_to_mac(value)
-            if mac:
-                suffix_to_mac[suffix] = normalize_mac(mac)
+    for suffix, value in fdb_addr.items():
+        mac = value_to_mac(value)
+        if mac:
+            suffix_to_mac[suffix] = normalize_mac(mac)
 
-    prefix_port = ".1.3.6.1.2.1.17.4.3.1.2."
-    for oid, value in fdb_port.items():
-        if not oid.startswith(prefix_port):
-            continue
-        suffix = oid[len(prefix_port):]
+    for suffix, value in fdb_port.items():
         mac = suffix_to_mac.get(suffix)
         if mac != laptop_mac:
             continue
         bridge_port = extract_integer(value)
         if bridge_port is None:
             continue
-        base_oid = f".1.3.6.1.2.1.17.1.4.1.2.{bridge_port}"
-        if_index = extract_integer(base_port_to_ifindex.get(base_oid))
+        if_index = extract_integer(base_port_to_ifindex.get(str(bridge_port)))
         if if_index and if_index != switch_uplink_port_index:
             return if_index
     return None
 
 def fallback_discover_access_port(switch_ip: str, community: str, switch_uplink_port_index: int) -> Optional[int]:
-    names = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.1"))
-    oper = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.2.2.1.8"))
-    speed = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.15"))
-    in_octets = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.6"))
-    out_octets = parse_walk_map(run_snmpwalk(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.10"))
+    names = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.1")
+    oper = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.2.2.1.8")
+    speed = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.15")
+    in_octets = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.6")
+    out_octets = walk_suffix_map(switch_ip, community, "1.3.6.1.2.1.31.1.1.1.10")
 
     best_idx = None
     best_score = -1
 
-    for oid, raw_name in names.items():
-        idx = int(oid.split(".")[-1])
+    for idx_text, raw_name in names.items():
+        idx = int(idx_text)
         name = extract_string(raw_name) or ""
         if idx == switch_uplink_port_index or not name.startswith("ether"):
             continue
-        oper_num = extract_integer(oper.get(f"IF-MIB::ifOperStatus.{idx}"))
-        speed_num = extract_integer(speed.get(f"IF-MIB::ifHighSpeed.{idx}"))
+        oper_num = extract_integer(oper.get(idx_text))
+        speed_num = extract_integer(speed.get(idx_text))
         if oper_num != 1 or not speed_num or speed_num <= 0:
             continue
-        score = (extract_integer(in_octets.get(f"IF-MIB::ifHCInOctets.{idx}")) or 0) + (extract_integer(out_octets.get(f"IF-MIB::ifHCOutOctets.{idx}")) or 0)
+        score = (extract_integer(in_octets.get(idx_text)) or 0) + (extract_integer(out_octets.get(idx_text)) or 0)
         if score > best_score:
             best_score = score
             best_idx = idx
     return best_idx
+
+def poll_disk_usage(ip: str, community: str) -> List[dict]:
+    storage_types = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.2")
+    descriptions = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.3")
+    allocation_units = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.4")
+    sizes = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.5")
+    used = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.6")
+
+    disks = []
+    for index, storage_type in storage_types.items():
+        numeric_type = storage_type.lstrip(".")
+        if numeric_type != HOST_RESOURCES_FIXED_DISK:
+            continue
+
+        unit_bytes = extract_integer(allocation_units.get(index))
+        total_units = extract_integer(sizes.get(index))
+        used_units = extract_integer(used.get(index))
+        if not unit_bytes or total_units is None or used_units is None:
+            continue
+
+        total_bytes = unit_bytes * total_units
+        used_bytes = unit_bytes * used_units
+        disks.append({
+            "index": int(index),
+            "mount": extract_string(descriptions.get(index)),
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "free_bytes": max(total_bytes - used_bytes, 0),
+            "usage_percent": round((used_bytes / total_bytes) * 100, 2) if total_bytes else None,
+        })
+    return disks
+
+def poll_extend_value(ip: str, community: str, token: str) -> Optional[str]:
+    result = run_snmpget(ip, community, extend_output_oid(token))
+    if not result.ok:
+        return None
+    return extract_string(result.value) or result.value
+
+def poll_host_metrics(
+    ip: str,
+    community: str,
+    wifi_token: Optional[str] = None,
+    gpu_token: Optional[str] = None,
+) -> dict:
+    cpu_idle = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.11.11.0").value)
+    load_1m = extract_float(run_snmpget(ip, community, "1.3.6.1.4.1.2021.10.1.3.1").value)
+    load_5m = extract_float(run_snmpget(ip, community, "1.3.6.1.4.1.2021.10.1.3.2").value)
+    load_15m = extract_float(run_snmpget(ip, community, "1.3.6.1.4.1.2021.10.1.3.3").value)
+
+    mem_total_mb = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.4.5.0").value)
+    mem_available_mb = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.4.6.0").value)
+    swap_total_mb = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.4.3.0").value)
+    swap_available_mb = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.4.4.0").value)
+    process_count = extract_integer(run_snmpget(ip, community, "1.3.6.1.2.1.25.1.6.0").value)
+
+    memory_used_mb = None
+    memory_usage_percent = None
+    if mem_total_mb is not None and mem_available_mb is not None:
+        memory_used_mb = max(mem_total_mb - mem_available_mb, 0)
+        if mem_total_mb:
+            memory_usage_percent = round((memory_used_mb / mem_total_mb) * 100, 2)
+
+    swap_used_mb = None
+    swap_usage_percent = None
+    if swap_total_mb is not None and swap_available_mb is not None:
+        swap_used_mb = max(swap_total_mb - swap_available_mb, 0)
+        if swap_total_mb:
+            swap_usage_percent = round((swap_used_mb / swap_total_mb) * 100, 2)
+
+    wifi = None
+    if wifi_token:
+        wifi = {
+            key: parse_maybe_number(value)
+            for key, value in parse_key_value_text(poll_extend_value(ip, community, wifi_token)).items()
+        } or None
+
+    gpu = None
+    if gpu_token:
+        gpu = {
+            key: parse_maybe_number(value)
+            for key, value in parse_key_value_text(poll_extend_value(ip, community, gpu_token)).items()
+        } or None
+
+    return {
+        "cpu": {
+            "usage_percent": None if cpu_idle is None else max(0, min(100, 100 - cpu_idle)),
+            "load_average": {
+                "1m": load_1m,
+                "5m": load_5m,
+                "15m": load_15m,
+            },
+        },
+        "memory": {
+            "total_mb": mem_total_mb,
+            "available_mb": mem_available_mb,
+            "used_mb": memory_used_mb,
+            "usage_percent": memory_usage_percent,
+            "swap_total_mb": swap_total_mb,
+            "swap_available_mb": swap_available_mb,
+            "swap_used_mb": swap_used_mb,
+            "swap_usage_percent": swap_usage_percent,
+        },
+        "disk": poll_disk_usage(ip, community),
+        "processes": {
+            "count": process_count,
+        },
+        "wifi": wifi,
+        "gpu": gpu,
+    }

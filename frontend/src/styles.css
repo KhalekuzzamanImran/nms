@@ -1,0 +1,469 @@
+* {
+    box-sizing: border-box;
+}
+
+:root {
+    color-scheme: dark;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background:
+        radial-gradient(
+            circle at top,
+            rgba(56, 189, 248, 0.12),
+            transparent 28%
+        ),
+        linear-gradient(180deg, #081120 0%, #0f172a 48%, #0b1220 100%);
+    color: #e2e8f0;
+}
+
+body {
+    margin: 0;
+    min-width: 320px;
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+
+.page {
+    max-width: 1380px;
+    margin: 0 auto;
+    padding: 32px 24px 40px;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+    margin: 0;
+}
+
+.page h1 {
+    font-size: clamp(2rem, 3vw, 2.75rem);
+    letter-spacing: -0.03em;
+}
+
+.sub {
+    margin-top: 10px;
+    margin-bottom: 22px;
+    color: #93a4bf;
+    max-width: 720px;
+}
+
+.device-grid,
+.link-grid {
+    display: grid;
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.device-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.link-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card {
+    background: rgba(12, 19, 35, 0.9);
+    border: 1px solid rgba(108, 124, 151, 0.26);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.18);
+}
+
+.device {
+    display: grid;
+    gap: 10px;
+}
+
+.device.online {
+    box-shadow:
+        inset 0 0 0 1px rgba(34, 197, 94, 0.25),
+        0 20px 45px rgba(0, 0, 0, 0.18);
+}
+
+.device.offline {
+    box-shadow:
+        inset 0 0 0 1px rgba(244, 63, 94, 0.25),
+        0 20px 45px rgba(0, 0, 0, 0.18);
+}
+
+.card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 68px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.pill-green {
+    background: rgba(34, 197, 94, 0.15);
+    color: #5cf2a6;
+}
+
+.pill-red {
+    background: rgba(244, 63, 94, 0.15);
+    color: #ff7e95;
+}
+
+.traffic-flow-card {
+    background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
+    border: 1px solid #eef2f7;
+    border-radius: 24px;
+    color: #101828;
+    padding: 28px 28px 40px;
+    box-shadow: 0 26px 60px rgba(3, 12, 28, 0.24);
+}
+
+.traffic-flow-header {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+}
+
+.traffic-flow-heading {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+}
+
+.traffic-flow-logo {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: #0b2d63;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+}
+
+.traffic-flow-heading h3 {
+    font-size: 1.9rem;
+    letter-spacing: -0.03em;
+}
+
+.traffic-flow-heading p {
+    margin-top: 4px;
+    color: #667085;
+    font-size: 0.95rem;
+}
+
+.topology-diagram {
+    display: grid;
+    grid-template-columns: 150px 150px 220px 150px 150px;
+    grid-template-rows: 150px 98px 150px;
+    align-items: center;
+    justify-content: center;
+    column-gap: 26px;
+    row-gap: 14px;
+    margin-top: 30px;
+}
+
+.topology-status-box {
+    background: transparent;
+    border-radius: 4px;
+    padding: 14px 12px;
+    min-height: 132px;
+    display: grid;
+    /* gap: 10px; */
+    align-content: start;
+}
+
+.topology-status-box:nth-child(1) {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.topology-status-box:nth-child(5) {
+    grid-column: 5;
+    grid-row: 1;
+}
+
+.topology-status-box:nth-child(8) {
+    grid-column: 5;
+    grid-row: 3;
+}
+
+.topology-status-box h4 {
+    font-size: 1rem;
+    line-height: 1.25;
+}
+
+.topology-status-metrics {
+    display: grid;
+    gap: 8px;
+}
+
+.topology-device {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+}
+
+.topology-device:nth-child(2) {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.topology-device:nth-child(4) {
+    grid-column: 4;
+    grid-row: 1;
+}
+
+.topology-device:nth-child(7) {
+    grid-column: 4;
+    grid-row: 3;
+}
+
+.topology-device h4 {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.flow-icon-shell {
+    display: grid;
+    place-items: center;
+    width: 150px;
+    height: 74px;
+    border-radius: 14px;
+    padding: 8px;
+    box-shadow: none;
+    background: #ccc;
+}
+
+.flow-icon-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.flow-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+
+.flow-chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.flow-chip-up {
+    background: #effcf6;
+    color: #14b87a;
+}
+
+.flow-chip-down {
+    background: #fff1f3;
+    color: #ef476f;
+}
+
+.flow-node-metrics {
+    display: grid;
+    gap: 8px;
+}
+
+.flow-node-metric {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: #667085;
+    font-size: 0.94rem;
+}
+
+.flow-node-metric strong {
+    color: #101828;
+}
+
+.flow-connector {
+    width: 100%;
+    height: 4px;
+    border-radius: 999px;
+}
+
+.flow-connector-up {
+    background: linear-gradient(90deg, #14c78d 0%, #13c7ba 100%);
+}
+
+.flow-connector-down {
+    background: repeating-linear-gradient(
+        90deg,
+        #f45170 0 16px,
+        rgba(244, 81, 112, 0.2) 16px 28px
+    );
+}
+
+.flow-connector-meta {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+    gap: 10px;
+    color: #667085;
+    font-size: 0.85rem;
+}
+
+.flow-connector-meta strong {
+    color: #2563eb;
+}
+
+.topology-link {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+}
+
+.topology-link-horizontal {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
+}
+
+.topology-link-horizontal .flow-connector {
+    width: 100%;
+}
+
+.topology-link-label {
+    width: 100%;
+}
+
+.topology-link-vertical {
+    grid-column: 4;
+    grid-row: 2;
+    justify-self: center;
+    align-self: stretch;
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: 12px;
+    row-gap: 0;
+}
+
+.flow-branch-line {
+    width: 0;
+    height: 100%;
+    border-left: 4px solid transparent;
+    border-radius: 999px;
+}
+
+.flow-branch-line.flow-connector-up {
+    border-left-color: #14c78d;
+    background: transparent;
+}
+
+.flow-branch-line.flow-connector-down {
+    border-left-color: #f45170;
+    background: transparent;
+}
+
+.flow-connector-meta-vertical {
+    width: max-content;
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    justify-content: start;
+    text-align: left;
+    order: -1;
+    margin-left: -80px;
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid rgba(108, 124, 151, 0.26);
+    margin: 14px 0;
+}
+
+@media (max-width: 1180px) {
+    .traffic-flow-header {
+        display: grid;
+    }
+
+    .topology-diagram {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+        justify-items: stretch;
+    }
+
+    .topology-status-box,
+    .topology-device,
+    .topology-link,
+    .topology-status-box:nth-child(1),
+    .topology-status-box:nth-child(5),
+    .topology-status-box:nth-child(8),
+    .topology-device:nth-child(2),
+    .topology-device:nth-child(4),
+    .topology-device:nth-child(7),
+    .topology-link-horizontal,
+    .topology-link-vertical {
+        grid-column: auto;
+        grid-row: auto;
+    }
+
+    .topology-link-horizontal .flow-connector {
+        width: 100%;
+    }
+
+    .topology-link-vertical {
+        justify-self: start;
+    }
+
+    .flow-branch-line {
+        height: 56px;
+    }
+
+    .device-grid,
+    .link-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 720px) {
+    .page {
+        padding: 24px 16px 32px;
+    }
+
+    .traffic-flow-card {
+        padding: 20px 18px;
+        border-radius: 20px;
+    }
+
+    .traffic-flow-heading {
+        align-items: flex-start;
+    }
+
+    .traffic-flow-heading h3 {
+        font-size: 1.45rem;
+    }
+
+    .topology-diagram {
+        gap: 18px;
+    }
+}

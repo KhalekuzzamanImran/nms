@@ -1,8 +1,9 @@
 from django.contrib import admin
 from django.urls import path
-from topology.views import topology_view
+from topology.views import host_metrics_view, topology_view
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/host-metrics/", host_metrics_view),
     path("api/topology/", topology_view),
 ]
