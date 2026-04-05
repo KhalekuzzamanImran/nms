@@ -68,6 +68,92 @@ p {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.metrics-section {
+    margin-top: 20px;
+}
+
+.section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.section-heading p {
+    margin-top: 6px;
+    color: #93a4bf;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.metrics-list {
+    display: grid;
+    gap: 10px;
+}
+
+.info-tile {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.info-tile span {
+    color: #93a4bf;
+}
+
+.diagnostic-message {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.24);
+    color: #fcd34d;
+    font-size: 0.92rem;
+    line-height: 1.45;
+}
+
+.disk-list {
+    display: grid;
+    gap: 12px;
+}
+
+.disk-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.disk-row > div {
+    display: grid;
+    gap: 4px;
+}
+
+.disk-row span,
+.empty-state {
+    color: #93a4bf;
+}
+
+.disk-type {
+    text-transform: capitalize;
+    font-size: 0.84rem;
+    letter-spacing: 0.04em;
+}
+
 .card {
     background: rgba(12, 19, 35, 0.9);
     border: 1px solid rgba(108, 124, 151, 0.26);
@@ -257,6 +343,14 @@ p {
     width: 100%;
     height: 100%;
     object-fit: contain;
+}
+
+@media (max-width: 1100px) {
+    .device-grid,
+    .link-grid,
+    .metrics-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .flow-chip {

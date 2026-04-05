@@ -5,7 +5,12 @@ from typing import Dict, List, Optional, Tuple
 
 SNMP_TIMEOUT = "2"
 SNMP_RETRIES = "0"
-HOST_RESOURCES_FIXED_DISK = "1.3.6.1.2.1.25.2.1.4"
+HOST_RESOURCES_STORAGE_TYPES = {
+    "1.3.6.1.2.1.25.2.1.3": "virtual_memory",
+    "1.3.6.1.2.1.25.2.1.4": "fixed_disk",
+    "1.3.6.1.2.1.25.2.1.5": "removable_disk",
+    "1.3.6.1.2.1.25.2.1.7": "flash_memory",
+}
 NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.1.2"
 
 @dataclass
@@ -72,6 +77,14 @@ def extract_float(snmp_value: Optional[str]) -> Optional[float]:
     tail = snmp_value.split(":", 1)[1].strip() if ":" in snmp_value else snmp_value.strip()
     match = re.search(r"(-?\d+(?:\.\d+)?)", tail)
     return float(match.group(1)) if match else None
+
+def extract_oid(snmp_value: Optional[str]) -> Optional[str]:
+    if not snmp_value:
+        return None
+    match = re.search(r"((?:\.)?\d+(?:\.\d+)+)", snmp_value)
+    if not match:
+        return None
+    return match.group(1).lstrip(".")
 
 def oper_label(value: Optional[int]) -> str:
     return {
@@ -151,6 +164,18 @@ def walk_suffix_map(ip: str, community: str, oid: str) -> Dict[str, str]:
         if full_oid.startswith(prefix):
             result[full_oid[len(prefix):]] = value
     return result
+
+def safe_snmpwalk_map(ip: str, community: str, oid: str) -> Tuple[Dict[str, str], Optional[str]]:
+    lines = run_snmpwalk(ip, community, oid, numeric=True)
+    if lines:
+        return parse_walk_map(lines), None
+
+    probe = run_snmpget(ip, community, oid)
+    if probe.ok:
+        return {}, "SNMP subtree returned no rows"
+    if probe.error:
+        return {}, probe.error
+    return {}, "SNMP walk returned no data"
 
 def extend_output_oid(token: str) -> str:
     encoded = ".".join(str(ord(char)) for char in token)
@@ -266,17 +291,44 @@ def fallback_discover_access_port(switch_ip: str, community: str, switch_uplink_
             best_idx = idx
     return best_idx
 
-def poll_disk_usage(ip: str, community: str) -> List[dict]:
-    storage_types = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.2")
-    descriptions = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.3")
-    allocation_units = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.4")
-    sizes = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.5")
-    used = walk_suffix_map(ip, community, "1.3.6.1.2.1.25.2.3.1.6")
+def poll_disk_usage(ip: str, community: str) -> Tuple[List[dict], Optional[str]]:
+    raw_storage_types, storage_type_error = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.2")
+    raw_descriptions, _ = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.3")
+    raw_allocation_units, _ = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.4")
+    raw_sizes, _ = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.5")
+    raw_used, _ = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.6")
+
+    prefix_map = {
+        "storage_types": "1.3.6.1.2.1.25.2.3.1.2",
+        "descriptions": "1.3.6.1.2.1.25.2.3.1.3",
+        "allocation_units": "1.3.6.1.2.1.25.2.3.1.4",
+        "sizes": "1.3.6.1.2.1.25.2.3.1.5",
+        "used": "1.3.6.1.2.1.25.2.3.1.6",
+    }
+
+    def to_suffix_map(values: Dict[str, str], base_oid: str) -> Dict[str, str]:
+        prefix = f".{base_oid}."
+        return {
+            key[len(prefix):]: value
+            for key, value in values.items()
+            if key.startswith(prefix)
+        }
+
+    storage_types = to_suffix_map(raw_storage_types, prefix_map["storage_types"])
+    descriptions = to_suffix_map(raw_descriptions, prefix_map["descriptions"])
+    allocation_units = to_suffix_map(raw_allocation_units, prefix_map["allocation_units"])
+    sizes = to_suffix_map(raw_sizes, prefix_map["sizes"])
+    used = to_suffix_map(raw_used, prefix_map["used"])
 
     disks = []
     for index, storage_type in storage_types.items():
-        numeric_type = storage_type.lstrip(".")
-        if numeric_type != HOST_RESOURCES_FIXED_DISK:
+        numeric_type = extract_oid(storage_type)
+        storage_type_label = HOST_RESOURCES_STORAGE_TYPES.get(numeric_type)
+        if storage_type_label is None:
+            continue
+
+        mount_name = extract_string(descriptions.get(index)) or f"storage-{index}"
+        if mount_name == "Physical memory":
             continue
 
         unit_bytes = extract_integer(allocation_units.get(index))
@@ -289,19 +341,25 @@ def poll_disk_usage(ip: str, community: str) -> List[dict]:
         used_bytes = unit_bytes * used_units
         disks.append({
             "index": int(index),
-            "mount": extract_string(descriptions.get(index)),
+            "mount": mount_name,
+            "storage_type": storage_type_label,
             "total_bytes": total_bytes,
             "used_bytes": used_bytes,
             "free_bytes": max(total_bytes - used_bytes, 0),
             "usage_percent": round((used_bytes / total_bytes) * 100, 2) if total_bytes else None,
         })
-    return disks
 
-def poll_extend_value(ip: str, community: str, token: str) -> Optional[str]:
+    if disks:
+        return disks, None
+    if storage_type_error:
+        return [], storage_type_error
+    return [], "No supported storage entries exposed by HOST-RESOURCES-MIB"
+
+def poll_extend_value(ip: str, community: str, token: str) -> Tuple[Optional[str], Optional[str]]:
     result = run_snmpget(ip, community, extend_output_oid(token))
     if not result.ok:
-        return None
-    return extract_string(result.value) or result.value
+        return None, result.error
+    return extract_string(result.value) or result.value, None
 
 def poll_host_metrics(
     ip: str,
@@ -334,19 +392,33 @@ def poll_host_metrics(
         if swap_total_mb:
             swap_usage_percent = round((swap_used_mb / swap_total_mb) * 100, 2)
 
+    disks, disk_error = poll_disk_usage(ip, community)
+
     wifi = None
+    wifi_error = None
     if wifi_token:
+        wifi_raw, wifi_error = poll_extend_value(ip, community, wifi_token)
         wifi = {
             key: parse_maybe_number(value)
-            for key, value in parse_key_value_text(poll_extend_value(ip, community, wifi_token)).items()
+            for key, value in parse_key_value_text(wifi_raw).items()
         } or None
+        if wifi is None and wifi_error is None:
+            wifi_error = f"No parsable output returned by extend token '{wifi_token}'"
+    else:
+        wifi_error = "Wi-Fi extend token not configured"
 
     gpu = None
+    gpu_error = None
     if gpu_token:
+        gpu_raw, gpu_error = poll_extend_value(ip, community, gpu_token)
         gpu = {
             key: parse_maybe_number(value)
-            for key, value in parse_key_value_text(poll_extend_value(ip, community, gpu_token)).items()
+            for key, value in parse_key_value_text(gpu_raw).items()
         } or None
+        if gpu is None and gpu_error is None:
+            gpu_error = f"No parsable output returned by extend token '{gpu_token}'"
+    else:
+        gpu_error = "GPU extend token not configured"
 
     return {
         "cpu": {
@@ -367,10 +439,13 @@ def poll_host_metrics(
             "swap_used_mb": swap_used_mb,
             "swap_usage_percent": swap_usage_percent,
         },
-        "disk": poll_disk_usage(ip, community),
+        "disk": disks,
+        "disk_error": disk_error,
         "processes": {
             "count": process_count,
         },
         "wifi": wifi,
+        "wifi_error": wifi_error,
         "gpu": gpu,
+        "gpu_error": gpu_error,
     }

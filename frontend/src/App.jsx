@@ -3,7 +3,10 @@ import laptopImage from "./assets/laptop.svg";
 import routerImage from "./assets/router.svg";
 import switchImage from "./assets/switch.svg";
 
-const API_URL = "http://127.0.0.1:8000/api/topology/";
+const API_BASE_URL =
+    import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
+const HOST_METRICS_API_URL = `${API_BASE_URL}/api/host-metrics/`;
 
 function DeviceCard({ title, data }) {
     const online = data?.status === "up";
@@ -33,6 +36,242 @@ function DeviceCard({ title, data }) {
                 </div>
             ) : null}
         </div>
+    );
+}
+
+function formatPercent(value) {
+    if (value == null || Number.isNaN(Number(value))) return "-";
+    return `${Number(value).toFixed(2)}%`;
+}
+
+function formatMegabytes(value) {
+    if (value == null || Number.isNaN(Number(value))) return "-";
+    const mb = Number(value);
+    if (mb >= 1024) {
+        return `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)} GB`;
+    }
+    return `${mb.toFixed(0)} MB`;
+}
+
+function formatBytes(value) {
+    if (value == null || Number.isNaN(Number(value))) return "-";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let amount = Number(value);
+    let unitIndex = 0;
+
+    while (amount >= 1024 && unitIndex < units.length - 1) {
+        amount /= 1024;
+        unitIndex += 1;
+    }
+
+    const precision = amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
+    return `${amount.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function InfoTile({ label, value }) {
+    return (
+        <div className="info-tile">
+            <span>{label}</span>
+            <strong>{value}</strong>
+        </div>
+    );
+}
+
+function DiagnosticMessage({ text }) {
+    if (!text) return null;
+    return <div className="diagnostic-message">{text}</div>;
+}
+
+function HostMetricsPanel({ data }) {
+    const metrics = data?.host_metrics;
+    const cpu = metrics?.cpu || {};
+    const memory = metrics?.memory || {};
+    const processes = metrics?.processes || {};
+    const wifi = metrics?.wifi || null;
+    const gpu = metrics?.gpu || null;
+    const disks = Array.isArray(metrics?.disk) ? metrics.disk : [];
+    const diskError = metrics?.disk_error || null;
+    const wifiError = metrics?.wifi_error || null;
+    const gpuError = metrics?.gpu_error || null;
+
+    return (
+        <section className="metrics-section">
+            <div className="section-heading">
+                <div>
+                    <h2>Host Metrics</h2>
+                    <p>Dedicated laptop telemetry from `/api/host-metrics/`</p>
+                </div>
+                <span className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}>
+                    {data?.status || "-"}
+                </span>
+            </div>
+
+            <div className="metrics-grid">
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>CPU</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Usage"
+                            value={formatPercent(cpu.usage_percent)}
+                        />
+                        <InfoTile
+                            label="Load 1m"
+                            value={cpu.load_average?.["1m"] ?? "-"}
+                        />
+                        <InfoTile
+                            label="Load 5m"
+                            value={cpu.load_average?.["5m"] ?? "-"}
+                        />
+                        <InfoTile
+                            label="Load 15m"
+                            value={cpu.load_average?.["15m"] ?? "-"}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Memory</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Used"
+                            value={formatMegabytes(memory.used_mb)}
+                        />
+                        <InfoTile
+                            label="Available"
+                            value={formatMegabytes(memory.available_mb)}
+                        />
+                        <InfoTile
+                            label="Total"
+                            value={formatMegabytes(memory.total_mb)}
+                        />
+                        <InfoTile
+                            label="Usage"
+                            value={formatPercent(memory.usage_percent)}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Processes</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Count"
+                            value={processes.count ?? "-"}
+                        />
+                        <InfoTile
+                            label="Swap Used"
+                            value={formatMegabytes(memory.swap_used_mb)}
+                        />
+                        <InfoTile
+                            label="Swap Total"
+                            value={formatMegabytes(memory.swap_total_mb)}
+                        />
+                        <InfoTile
+                            label="Swap Usage"
+                            value={formatPercent(memory.swap_usage_percent)}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Wireless</h3>
+                    </div>
+                    <DiagnosticMessage text={wifiError} />
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Interface"
+                            value={wifi?.iface || "-"}
+                        />
+                        <InfoTile
+                            label="SSID"
+                            value={wifi?.ssid || "-"}
+                        />
+                        <InfoTile
+                            label="Signal"
+                            value={
+                                wifi?.signal_dbm != null
+                                    ? `${wifi.signal_dbm} dBm`
+                                    : "-"
+                            }
+                        />
+                        <InfoTile
+                            label="TX Rate"
+                            value={
+                                wifi?.tx_bitrate_mbps != null
+                                    ? `${wifi.tx_bitrate_mbps} Mbps`
+                                    : "-"
+                            }
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>GPU</h3>
+                    </div>
+                    <DiagnosticMessage text={gpuError} />
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Utilization"
+                            value={
+                                gpu?.util_percent != null
+                                    ? `${gpu.util_percent}%`
+                                    : gpu?.status || "-"
+                            }
+                        />
+                        <InfoTile
+                            label="Memory Used"
+                            value={formatMegabytes(gpu?.memory_used_mb)}
+                        />
+                        <InfoTile
+                            label="Memory Total"
+                            value={formatMegabytes(gpu?.memory_total_mb)}
+                        />
+                        <InfoTile
+                            label="Temperature"
+                            value={gpu?.temp_c != null ? `${gpu.temp_c} C` : "-"}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Disk</h3>
+                    </div>
+                    <DiagnosticMessage text={diskError} />
+                    <div className="disk-list">
+                        {disks.length ? (
+                            disks.map((disk) => (
+                                <div className="disk-row" key={disk.index}>
+                                    <div>
+                                        <strong>{disk.mount || `Disk ${disk.index}`}</strong>
+                                        <span className="disk-type">
+                                            {disk.storage_type || "storage"}
+                                        </span>
+                                        <span>
+                                            {formatBytes(disk.used_bytes)} /{" "}
+                                            {formatBytes(disk.total_bytes)}
+                                        </span>
+                                    </div>
+                                    <strong>
+                                        {formatPercent(disk.usage_percent)}
+                                    </strong>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="empty-state">No disk metrics available.</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </section>
     );
 }
 
@@ -304,16 +543,25 @@ function TopologyMap({ nodes, links }) {
 }
 
 export default function App() {
-    const [data, setData] = useState(null);
+    const [topologyData, setTopologyData] = useState(null);
+    const [hostMetricsData, setHostMetricsData] = useState(null);
     const [loading, setLoading] = useState(true);
 
     async function load() {
         try {
-            const res = await fetch(API_URL);
-            const json = await res.json();
-            setData(json);
+            const [topologyRes, hostMetricsRes] = await Promise.all([
+                fetch(TOPOLOGY_API_URL),
+                fetch(HOST_METRICS_API_URL),
+            ]);
+            const [topologyJson, hostMetricsJson] = await Promise.all([
+                topologyRes.json(),
+                hostMetricsRes.json(),
+            ]);
+            setTopologyData(topologyJson);
+            setHostMetricsData(hostMetricsJson);
         } catch (e) {
-            setData(null);
+            setTopologyData(null);
+            setHostMetricsData(null);
         } finally {
             setLoading(false);
         }
@@ -325,8 +573,9 @@ export default function App() {
         return () => clearInterval(timer);
     }, []);
 
-    const nodes = data?.nodes || {};
-    const links = data?.links || {};
+    const nodes = topologyData?.nodes || {};
+    const links = topologyData?.links || {};
+    const laptopNode = hostMetricsData?.node || nodes.laptop;
 
     return (
         <div className="page">
@@ -343,7 +592,7 @@ export default function App() {
             <div className="device-grid">
                 <DeviceCard title="Router" data={nodes.router} />
                 <DeviceCard title="Switch" data={nodes.switch} />
-                <DeviceCard title="Ubuntu Laptop" data={nodes.laptop} />
+                <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
             </div>
 
             <div className="link-grid">
@@ -357,6 +606,8 @@ export default function App() {
                     link={links.switch_to_laptop}
                 />
             </div>
+
+            <HostMetricsPanel data={laptopNode} />
         </div>
     );
 }
