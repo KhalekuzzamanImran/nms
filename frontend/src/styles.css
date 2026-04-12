@@ -61,11 +61,11 @@ p {
 }
 
 .device-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .link-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metrics-section {
@@ -276,18 +276,23 @@ p {
     align-content: start;
 }
 
-.topology-status-box:nth-child(1) {
+.topology-router-status {
     grid-column: 1;
     grid-row: 1;
 }
 
-.topology-status-box:nth-child(5) {
+.topology-switch-status {
     grid-column: 5;
     grid-row: 1;
 }
 
-.topology-status-box:nth-child(8) {
+.topology-laptop-status {
     grid-column: 5;
+    grid-row: 3;
+}
+
+.topology-server-status {
+    grid-column: 1;
     grid-row: 3;
 }
 
@@ -307,18 +312,23 @@ p {
     gap: 10px;
 }
 
-.topology-device:nth-child(2) {
+.topology-router-device {
     grid-column: 2;
     grid-row: 1;
 }
 
-.topology-device:nth-child(4) {
+.topology-switch-device {
     grid-column: 4;
     grid-row: 1;
 }
 
-.topology-device:nth-child(7) {
+.topology-laptop-device {
     grid-column: 4;
+    grid-row: 3;
+}
+
+.topology-server-device {
+    grid-column: 2;
     grid-row: 3;
 }
 
@@ -489,6 +499,26 @@ p {
     margin-left: -80px;
 }
 
+.topology-link-server-vertical {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: center;
+    align-self: stretch;
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: 12px;
+    row-gap: 0;
+}
+
+.topology-link-server-vertical .flow-connector-meta-vertical {
+    order: 1;
+    margin-left: 0;
+    margin-right: -80px;
+    text-align: right;
+    justify-items: end;
+}
+
 hr {
     border: 0;
     border-top: 1px solid rgba(108, 124, 151, 0.26);
@@ -509,14 +539,17 @@ hr {
     .topology-status-box,
     .topology-device,
     .topology-link,
-    .topology-status-box:nth-child(1),
-    .topology-status-box:nth-child(5),
-    .topology-status-box:nth-child(8),
-    .topology-device:nth-child(2),
-    .topology-device:nth-child(4),
-    .topology-device:nth-child(7),
+    .topology-router-status,
+    .topology-switch-status,
+    .topology-laptop-status,
+    .topology-server-status,
+    .topology-router-device,
+    .topology-switch-device,
+    .topology-laptop-device,
+    .topology-server-device,
     .topology-link-horizontal,
-    .topology-link-vertical {
+    .topology-link-vertical,
+    .topology-link-server-vertical {
         grid-column: auto;
         grid-row: auto;
     }
@@ -525,7 +558,8 @@ hr {
         width: 100%;
     }
 
-    .topology-link-vertical {
+    .topology-link-vertical,
+    .topology-link-server-vertical {
         justify-self: start;
     }
 

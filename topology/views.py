@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .snmp import (
+    discover_router_port_for_host,
     discover_switch_port_for_laptop,
     fallback_discover_access_port,
     is_link_up,
@@ -11,15 +12,37 @@ from .snmp import (
     poll_link_side,
 )
 
+def build_host_node(
+    ip: str,
+    community: str,
+    wifi_token: str | None = None,
+    gpu_token: str | None = None,
+    include_optional_metric_errors: bool = True,
+) -> dict:
+    host = poll_device(ip, community)
+    host["host_metrics"] = poll_host_metrics(
+        ip,
+        community,
+        wifi_token=wifi_token,
+        gpu_token=gpu_token,
+        include_optional_metric_errors=include_optional_metric_errors,
+    )
+    return host
+
 def build_laptop_host_metrics(community: str) -> dict:
-    laptop = poll_device(settings.LAPTOP_IP, community)
-    laptop["host_metrics"] = poll_host_metrics(
+    return build_host_node(
         settings.LAPTOP_IP,
         community,
         wifi_token=getattr(settings, "LAPTOP_WIFI_EXTEND_TOKEN", "wifi_info"),
         gpu_token=getattr(settings, "LAPTOP_GPU_EXTEND_TOKEN", "gpu_info"),
     )
-    return laptop
+
+def build_server_host_metrics(community: str) -> dict:
+    return build_host_node(
+        settings.SERVER_IP,
+        community,
+        include_optional_metric_errors=False,
+    )
 
 @api_view(["GET"])
 def topology_view(request):
@@ -28,6 +51,7 @@ def topology_view(request):
     router = poll_device(settings.ROUTER_IP, community)
     switch = poll_device(settings.SWITCH_IP, community)
     laptop = build_laptop_host_metrics(community)
+    server = build_server_host_metrics(community)
 
     router_to_switch_router_side = poll_link_side(
         settings.ROUTER_IP, community, settings.ROUTER_TO_SWITCH_ROUTER_PORT_INDEX
@@ -79,6 +103,33 @@ def topology_view(request):
         }
     )
 
+    router_to_server_port_index = None
+    if getattr(settings, "AUTO_DISCOVER_SERVER_ROUTER_PORT", False):
+        router_to_server_port_index = discover_router_port_for_host(
+            settings.ROUTER_IP,
+            settings.SERVER_IP,
+            community,
+        )
+
+    router_to_server_router_side = (
+        poll_link_side(settings.ROUTER_IP, community, router_to_server_port_index)
+        if router_to_server_port_index is not None
+        else {
+            "port_index": None,
+            "port_name": None,
+            "admin_status": None,
+            "admin_status_label": "unknown",
+            "oper_status": None,
+            "oper_status_label": "unknown",
+            "speed_mbps": None,
+            "last_change": None,
+            "in_octets": None,
+            "out_octets": None,
+            "in_errors": None,
+            "out_errors": None,
+        }
+    )
+
     router_switch_up = (
         router["status"] == "up"
         and switch["status"] == "up"
@@ -93,11 +144,19 @@ def topology_view(request):
         and is_link_up(switch_to_laptop_switch_side)
     )
 
+    router_server_up = (
+        router["status"] == "up"
+        and server["status"] == "up"
+        and router_to_server_port_index is not None
+        and is_link_up(router_to_server_router_side)
+    )
+
     return Response({
         "nodes": {
             "router": router,
             "switch": switch,
             "laptop": laptop,
+            "server": server,
         },
         "links": {
             "router_to_switch": {
@@ -112,11 +171,20 @@ def topology_view(request):
                 "discovered_port_index": discovered_port_index,
                 "discovery_method": discovery_method,
             },
+            "router_to_server": {
+                "status": "up" if router_server_up else "down",
+                "router_side": router_to_server_router_side,
+                "server_ip": settings.SERVER_IP,
+                "discovered_port_index": router_to_server_port_index,
+                "discovery_method": (
+                    "router_arp_table" if router_to_server_port_index is not None else "none"
+                ),
+            },
         },
         "summary": {
-            "online_nodes": sum(1 for n in [router, switch, laptop] if n["status"] == "up"),
-            "offline_nodes": sum(1 for n in [router, switch, laptop] if n["status"] != "up"),
-            "active_links": sum(1 for s in [router_switch_up, switch_laptop_up] if s),
+            "online_nodes": sum(1 for n in [router, switch, laptop, server] if n["status"] == "up"),
+            "offline_nodes": sum(1 for n in [router, switch, laptop, server] if n["status"] != "up"),
+            "active_links": sum(1 for s in [router_switch_up, switch_laptop_up, router_server_up] if s),
         },
     })
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import laptopImage from "./assets/laptop.svg";
 import routerImage from "./assets/router.svg";
+import serverImage from "./assets/server.svg";
 import switchImage from "./assets/switch.svg";
 
 const API_BASE_URL =
@@ -82,7 +83,11 @@ function DiagnosticMessage({ text }) {
     return <div className="diagnostic-message">{text}</div>;
 }
 
-function HostMetricsPanel({ data }) {
+function HostMetricsPanel({
+    data,
+    title = "Host Metrics",
+    description = "Dedicated telemetry",
+}) {
     const metrics = data?.host_metrics;
     const cpu = metrics?.cpu || {};
     const memory = metrics?.memory || {};
@@ -98,8 +103,8 @@ function HostMetricsPanel({ data }) {
         <section className="metrics-section">
             <div className="section-heading">
                 <div>
-                    <h2>Host Metrics</h2>
-                    <p>Dedicated laptop telemetry from `/api/host-metrics/`</p>
+                    <h2>{title}</h2>
+                    <p>{description}</p>
                 </div>
                 <span className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}>
                     {data?.status || "-"}
@@ -376,9 +381,9 @@ function getLinkSpeed(link) {
     );
 }
 
-function DeviceNode({ title, imageSrc, imageAlt, accent = "mint" }) {
+function DeviceNode({ title, imageSrc, imageAlt, accent = "mint", className = "" }) {
     return (
-        <article className="topology-device">
+        <article className={`topology-device ${className}`.trim()}>
             <div className={`flow-icon-shell-${accent}`}>
                 <img
                     className="flow-icon-image"
@@ -391,11 +396,11 @@ function DeviceNode({ title, imageSrc, imageAlt, accent = "mint" }) {
     );
 }
 
-function StatusInfoBox({ title, status, metrics = [] }) {
+function StatusInfoBox({ title, status, metrics = [], className = "" }) {
     const online = status === "up";
 
     return (
-        <aside className="topology-status-box">
+        <aside className={`topology-status-box ${className}`.trim()}>
             <h4>{title}</h4>
             <div
                 className={`flow-chip ${online ? "flow-chip-up" : "flow-chip-down"}`}
@@ -418,8 +423,10 @@ function StatusInfoBox({ title, status, metrics = [] }) {
 function TopologyMap({ nodes, links }) {
     const rsUp = links?.router_to_switch?.status === "up";
     const slUp = links?.switch_to_laptop?.status === "up";
+    const srvUp = links?.router_to_server?.status === "up";
     const routerSwitchSide = getPrimarySide(links?.router_to_switch);
     const switchLaptopSide = getPrimarySide(links?.switch_to_laptop);
+    const routerServerSide = getPrimarySide(links?.router_to_server);
 
     return (
         <section className="traffic-flow-card">
@@ -435,6 +442,7 @@ function TopologyMap({ nodes, links }) {
 
             <div className="topology-diagram">
                 <StatusInfoBox
+                    className="topology-router-status"
                     title="Router"
                     status={nodes?.router?.status}
                     metrics={[
@@ -453,6 +461,7 @@ function TopologyMap({ nodes, links }) {
                 />
 
                 <DeviceNode
+                    className="topology-router-device"
                     title="Router"
                     imageSrc={routerImage}
                     imageAlt="Router"
@@ -474,6 +483,7 @@ function TopologyMap({ nodes, links }) {
                 </div>
 
                 <DeviceNode
+                    className="topology-switch-device"
                     title="Switch"
                     imageSrc={switchImage}
                     imageAlt="Switch"
@@ -481,6 +491,7 @@ function TopologyMap({ nodes, links }) {
                 />
 
                 <StatusInfoBox
+                    className="topology-switch-status"
                     title="Switch"
                     status={nodes?.switch?.status}
                     metrics={[
@@ -514,6 +525,7 @@ function TopologyMap({ nodes, links }) {
                 </div>
 
                 <DeviceNode
+                    className="topology-laptop-device"
                     title="Laptop"
                     imageSrc={laptopImage}
                     imageAlt="Laptop"
@@ -521,6 +533,7 @@ function TopologyMap({ nodes, links }) {
                 />
 
                 <StatusInfoBox
+                    className="topology-laptop-status"
                     title="Laptop"
                     status={nodes?.laptop?.status}
                     metrics={[
@@ -533,6 +546,47 @@ function TopologyMap({ nodes, links }) {
                             label: "Link",
                             value: formatBandwidth(
                                 getLinkSpeed(links?.switch_to_laptop),
+                            ),
+                        },
+                    ]}
+                />
+
+                <div className="topology-link topology-link-server-vertical">
+                    <div
+                        className={`flow-branch-line ${srvUp ? "flow-connector-up" : "flow-connector-down"}`}
+                    ></div>
+                    <div className="flow-connector-meta flow-connector-meta-vertical">
+                        <span>Router to Server</span>
+                        <strong>
+                            {formatBandwidth(
+                                getLinkSpeed(links?.router_to_server),
+                            )}
+                        </strong>
+                    </div>
+                </div>
+
+                <DeviceNode
+                    className="topology-server-device"
+                    title="Server"
+                    imageSrc={serverImage}
+                    imageAlt="Server"
+                    accent="blue"
+                />
+
+                <StatusInfoBox
+                    className="topology-server-status"
+                    title="Server"
+                    status={nodes?.server?.status}
+                    metrics={[
+                        {
+                            label: "Name",
+                            value: nodes?.server?.name || "-",
+                        },
+                        { label: "Address", value: nodes?.server?.ip || "-" },
+                        {
+                            label: "Link",
+                            value: formatBandwidth(
+                                getLinkSpeed(links?.router_to_server),
                             ),
                         },
                     ]}
@@ -576,6 +630,7 @@ export default function App() {
     const nodes = topologyData?.nodes || {};
     const links = topologyData?.links || {};
     const laptopNode = hostMetricsData?.node || nodes.laptop;
+    const serverNode = nodes.server;
 
     return (
         <div className="page">
@@ -593,6 +648,7 @@ export default function App() {
                 <DeviceCard title="Router" data={nodes.router} />
                 <DeviceCard title="Switch" data={nodes.switch} />
                 <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
+                <DeviceCard title="Server" data={serverNode} />
             </div>
 
             <div className="link-grid">
@@ -605,9 +661,23 @@ export default function App() {
                     title="Switch to Laptop"
                     link={links.switch_to_laptop}
                 />
+                <LinkCard
+                    title="Router to Server"
+                    link={links.router_to_server}
+                />
             </div>
 
-            <HostMetricsPanel data={laptopNode} />
+            <HostMetricsPanel
+                data={laptopNode}
+                title="Laptop Metrics"
+                description="Detailed laptop telemetry from `/api/host-metrics/`"
+            />
+
+            <HostMetricsPanel
+                data={serverNode}
+                title="Server Metrics"
+                description="Live SNMP telemetry for the server at `10.10.10.252`"
+            />
         </div>
     );
 }

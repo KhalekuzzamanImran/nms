@@ -238,6 +238,19 @@ def get_laptop_active_interface(ip: str, community: str) -> Optional[dict]:
         candidates.append({"if_index": int(idx), "if_name": name, "mac": normalize_mac(mac)})
     return candidates[0] if candidates else None
 
+def discover_router_port_for_host(router_ip: str, host_ip: str, community: str) -> Optional[int]:
+    arp_entries = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.4.22.1.2")
+    target_suffix = f".{host_ip}"
+
+    for suffix in arp_entries.keys():
+        if not suffix.endswith(target_suffix):
+            continue
+        if_index_text = suffix[: -len(target_suffix)]
+        if_index = extract_integer(if_index_text)
+        if if_index is not None:
+            return if_index
+    return None
+
 def discover_switch_port_for_laptop(switch_ip: str, laptop_ip: str, community: str, switch_uplink_port_index: int) -> Optional[int]:
     laptop_iface = get_laptop_active_interface(laptop_ip, community)
     if not laptop_iface:
@@ -366,6 +379,7 @@ def poll_host_metrics(
     community: str,
     wifi_token: Optional[str] = None,
     gpu_token: Optional[str] = None,
+    include_optional_metric_errors: bool = True,
 ) -> dict:
     cpu_idle = extract_integer(run_snmpget(ip, community, "1.3.6.1.4.1.2021.11.11.0").value)
     load_1m = extract_float(run_snmpget(ip, community, "1.3.6.1.4.1.2021.10.1.3.1").value)
@@ -404,7 +418,7 @@ def poll_host_metrics(
         } or None
         if wifi is None and wifi_error is None:
             wifi_error = f"No parsable output returned by extend token '{wifi_token}'"
-    else:
+    elif include_optional_metric_errors:
         wifi_error = "Wi-Fi extend token not configured"
 
     gpu = None
@@ -417,7 +431,7 @@ def poll_host_metrics(
         } or None
         if gpu is None and gpu_error is None:
             gpu_error = f"No parsable output returned by extend token '{gpu_token}'"
-    else:
+    elif include_optional_metric_errors:
         gpu_error = "GPU extend token not configured"
 
     return {
