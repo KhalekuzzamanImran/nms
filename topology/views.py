@@ -11,7 +11,9 @@ from .snmp import (
     poll_device,
     poll_host_metrics,
     poll_link_side,
+    poll_ping,
     walk_router_physical_interfaces,
+    walk_switch_physical_interfaces,
 )
 from .ssh_gateway import session_manager
 
@@ -41,6 +43,7 @@ def empty_host_metrics() -> dict:
                 "15m": None,
             },
         },
+        "cpu_error": "Host is down",
         "memory": {
             "total_mb": None,
             "available_mb": None,
@@ -51,15 +54,43 @@ def empty_host_metrics() -> dict:
             "swap_used_mb": None,
             "swap_usage_percent": None,
         },
+        "memory_error": "Host is down",
         "disk": [],
         "disk_error": "Host is down",
         "processes": {
             "count": None,
         },
+        "network": None,
+        "network_error": "Host is down",
         "wifi": None,
         "wifi_error": "Host is down",
         "gpu": None,
         "gpu_error": "Host is down",
+    }
+
+def empty_ping_metrics() -> dict:
+    return {
+        "sent": None,
+        "received": None,
+        "packet_loss_percent": None,
+        "avg_latency_ms": None,
+        "error": "Host is down",
+    }
+
+def empty_physical_ports() -> dict:
+    return {
+        "total_physical_ports": 0,
+        "up_physical_ports": 0,
+        "down_physical_ports": 0,
+        "ports": [],
+        "totals": {
+            "in_octets": 0,
+            "out_octets": 0,
+            "in_errors": 0,
+            "out_errors": 0,
+            "in_discards": 0,
+            "out_discards": 0,
+        },
     }
 
 def build_host_node(
@@ -67,11 +98,13 @@ def build_host_node(
     community: str,
     wifi_token: str | None = None,
     gpu_token: str | None = None,
+    server_metrics_token: str | None = None,
     include_optional_metric_errors: bool = True,
 ) -> dict:
     host = poll_device(ip, community)
     if host["status"] != "up":
         host["host_metrics"] = empty_host_metrics()
+        host["ping"] = empty_ping_metrics()
         return host
 
     host["host_metrics"] = poll_host_metrics(
@@ -79,8 +112,10 @@ def build_host_node(
         community,
         wifi_token=wifi_token,
         gpu_token=gpu_token,
+        server_metrics_token=server_metrics_token,
         include_optional_metric_errors=include_optional_metric_errors,
     )
+    host["ping"] = poll_ping(ip)
     return host
 
 def build_laptop_host_metrics(community: str) -> dict:
@@ -95,8 +130,34 @@ def build_server_host_metrics(community: str) -> dict:
     return build_host_node(
         settings.SERVER_IP,
         community,
+        server_metrics_token=getattr(
+            settings, "SERVER_METRICS_EXTEND_TOKEN", "server_metrics"
+        ),
         include_optional_metric_errors=False,
     )
+
+def build_network_device_node(
+    ip: str,
+    community: str,
+    *,
+    physical_port_walker,
+    include_optional_metric_errors: bool = False,
+) -> dict:
+    device = poll_device(ip, community)
+    if device["status"] != "up":
+        device["host_metrics"] = empty_host_metrics()
+        device["ping"] = empty_ping_metrics()
+        device["physical_ports"] = empty_physical_ports()
+        return device
+
+    device["host_metrics"] = poll_host_metrics(
+        ip,
+        community,
+        include_optional_metric_errors=include_optional_metric_errors,
+    )
+    device["ping"] = poll_ping(ip)
+    device["physical_ports"] = physical_port_walker(ip, community)
+    return device
 
 def ssh_device_registry() -> dict:
     return {
@@ -110,18 +171,16 @@ def ssh_device_registry() -> dict:
 def topology_view(request):
     community = settings.SNMP_COMMUNITY
 
-    router = poll_device(settings.ROUTER_IP, community)
-    router["physical_ports"] = (
-        walk_router_physical_interfaces(settings.ROUTER_IP, community)
-        if router["status"] == "up"
-        else {
-            "total_physical_ports": 0,
-            "up_physical_ports": 0,
-            "down_physical_ports": 0,
-            "ports": [],
-        }
+    router = build_network_device_node(
+        settings.ROUTER_IP,
+        community,
+        physical_port_walker=walk_router_physical_interfaces,
     )
-    switch = poll_device(settings.SWITCH_IP, community)
+    switch = build_network_device_node(
+        settings.SWITCH_IP,
+        community,
+        physical_port_walker=walk_switch_physical_interfaces,
+    )
     laptop = build_laptop_host_metrics(community)
     server = build_server_host_metrics(community)
 
@@ -263,17 +322,12 @@ def host_metrics_view(request):
 @api_view(["GET"])
 def router_ports_view(request):
     community = settings.SNMP_COMMUNITY
-    router = poll_device(settings.ROUTER_IP, community)
-    physical_ports = (
-        walk_router_physical_interfaces(settings.ROUTER_IP, community)
-        if router["status"] == "up"
-        else {
-            "total_physical_ports": 0,
-            "up_physical_ports": 0,
-            "down_physical_ports": 0,
-            "ports": [],
-        }
+    router = build_network_device_node(
+        settings.ROUTER_IP,
+        community,
+        physical_port_walker=walk_router_physical_interfaces,
     )
+    physical_ports = router["physical_ports"]
 
     return Response({
         "router": router,

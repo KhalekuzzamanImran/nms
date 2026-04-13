@@ -13,14 +13,10 @@ const HOST_METRICS_API_URL = `${API_BASE_URL}/api/host-metrics/`;
 const ROUTER_PORTS_API_URL = `${API_BASE_URL}/api/router-ports/`;
 const SSH_SESSION_API_URL = `${API_BASE_URL}/api/ssh/session/`;
 
-function DeviceCard({ title, data, onClick }) {
+function DeviceCard({ title, data }) {
     const online = data?.status === "up";
     return (
-        <button
-            type="button"
-            className={`card device device-card-button ${online ? "online" : "offline"}`}
-            onClick={onClick}
-        >
+        <div className={`card device ${online ? "online" : "offline"}`}>
             <div className="card-title-row">
                 <h2>{title}</h2>
                 <span className={`pill ${online ? "pill-green" : "pill-red"}`}>
@@ -44,7 +40,7 @@ function DeviceCard({ title, data, onClick }) {
                     <strong>Error:</strong> {data.error}
                 </div>
             ) : null}
-        </button>
+        </div>
     );
 }
 
@@ -77,6 +73,11 @@ function formatBytes(value) {
     return `${amount.toFixed(precision)} ${units[unitIndex]}`;
 }
 
+function formatLatency(value) {
+    if (value == null || Number.isNaN(Number(value))) return "-";
+    return `${Number(value).toFixed(2)} ms`;
+}
+
 function InfoTile({ label, value }) {
     return (
         <div className="info-tile">
@@ -107,79 +108,7 @@ function RouterPortsCard({ data }) {
             .join(", ");
     }
 
-    return (
-        <section className="metrics-section">
-            <div className="section-heading">
-                <div>
-                    <h2>Router Physical Ports</h2>
-                    <p>Physical interface count and current up/down state</p>
-                </div>
-                <span
-                    className={`pill ${router?.status === "up" ? "pill-green" : "pill-red"}`}
-                >
-                    {router?.status || "-"}
-                </span>
-            </div>
-
-            <div className="router-ports-summary">
-                <InfoTile
-                    label="Total Ports"
-                    value={physicalPorts?.total_physical_ports ?? "-"}
-                />
-                <InfoTile
-                    label="Ports Up"
-                    value={physicalPorts?.up_physical_ports ?? "-"}
-                />
-                <InfoTile
-                    label="Ports Down"
-                    value={physicalPorts?.down_physical_ports ?? "-"}
-                />
-            </div>
-
-            <div className="card">
-                <div className="card-title-row">
-                    <h3>Physical Port Status</h3>
-                </div>
-                <div className="router-port-groups">
-                    <div className="router-port-group">
-                        <strong>Up Ports</strong>
-                        <span>{formatPortList(upPorts)}</span>
-                    </div>
-                    <div className="router-port-group">
-                        <strong>Down Ports</strong>
-                        <span>{formatPortList(downPorts)}</span>
-                    </div>
-                </div>
-                <div className="router-port-list">
-                    {ports.length ? (
-                        ports.map((port) => {
-                            const up = port.oper_status === 1;
-                            return (
-                                <div
-                                    className="router-port-row"
-                                    key={port.port_index}
-                                >
-                                    <div>
-                                        <strong>{port.port_name}</strong>
-                                        <span>Index {port.port_index}</span>
-                                    </div>
-                                    <span
-                                        className={`pill ${up ? "pill-green" : "pill-red"}`}
-                                    >
-                                        {port.oper_status_label || "unknown"}
-                                    </span>
-                                </div>
-                            );
-                        })
-                    ) : (
-                        <div className="empty-state">
-                            No physical router ports found.
-                        </div>
-                    )}
-                </div>
-            </div>
-        </section>
-    );
+    return null;
 }
 
 function buildWebSocketUrl(path, token) {
@@ -199,6 +128,7 @@ function SshTerminalModal({ device, onClose }) {
     const [terminalMode, setTerminalMode] = useState("loading");
     const [plainOutput, setPlainOutput] = useState("");
     const [plainInput, setPlainInput] = useState("");
+    const [isConnected, setIsConnected] = useState(false);
 
     function appendOutput(text) {
         if (terminalRef.current) {
@@ -297,6 +227,7 @@ function SshTerminalModal({ device, onClose }) {
             socketRef.current = socket;
 
             socket.onopen = () => {
+                setIsConnected(true);
                 appendOutput("SSH connected.\r\n");
                 if (terminalRef.current) {
                     terminalRef.current.focus();
@@ -317,6 +248,7 @@ function SshTerminalModal({ device, onClose }) {
             };
 
             socket.onclose = () => {
+                setIsConnected(false);
                 appendOutput("\r\nConnection closed.\r\n");
             };
         } catch (connectError) {
@@ -345,6 +277,18 @@ function SshTerminalModal({ device, onClose }) {
         appendOutput(`$ ${plainInput}\r\n`);
         socketRef.current.send(`${plainInput}\r`);
         setPlainInput("");
+    }
+
+    function handlePlainInputKeyDown(event) {
+        if (
+            event.key === "c" &&
+            (event.ctrlKey || event.metaKey) &&
+            socketRef.current &&
+            socketRef.current.readyState === WebSocket.OPEN
+        ) {
+            event.preventDefault();
+            socketRef.current.send("\u0003");
+        }
     }
 
     return (
@@ -403,18 +347,28 @@ function SshTerminalModal({ device, onClose }) {
                             {plainOutput}
                         </pre>
                         <form
-                            className="ssh-plain-input-row"
+                            className="ssh-plain-input-form"
                             onSubmit={handlePlainInputSubmit}
                         >
                             <input
                                 type="text"
-                                placeholder="Type command and press Send"
+                                className="ssh-plain-command-input"
+                                placeholder={
+                                    isConnected
+                                        ? "Type a command and press Enter. Press Ctrl+C to interrupt."
+                                        : "Connect first to start typing commands."
+                                }
                                 value={plainInput}
                                 onChange={(event) =>
                                     setPlainInput(event.target.value)
                                 }
+                                onKeyDown={handlePlainInputKeyDown}
+                                disabled={!isConnected}
+                                autoComplete="off"
+                                autoCapitalize="off"
+                                autoCorrect="off"
+                                spellCheck="false"
                             />
-                            <button type="submit">Send</button>
                         </form>
                     </div>
                 )}
@@ -620,6 +574,330 @@ function HostMetricsPanel({
                         )}
                     </div>
                 </div>
+            </div>
+        </section>
+    );
+}
+
+function ServerRealtimeMetricsPanel({ data }) {
+    const metrics = data?.host_metrics || {};
+    const cpu = metrics.cpu || {};
+    const cpuError = metrics.cpu_error || null;
+    const memory = metrics.memory || {};
+    const memoryError = metrics.memory_error || null;
+    const processes = metrics.processes || {};
+    const disks = Array.isArray(metrics.disk) ? metrics.disk : [];
+    const diskError = metrics.disk_error || null;
+    const network = metrics.network || null;
+    const networkError = metrics.network_error || null;
+    const ping = data?.ping || {};
+
+    return (
+        <section className="metrics-section">
+            <div className="section-heading">
+                <div>
+                    <h2>Realtime Server Metrics</h2>
+                    <p>Live server telemetry refreshed from SNMP polling.</p>
+                </div>
+                <span
+                    className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}
+                >
+                    {data?.status || "-"}
+                </span>
+            </div>
+
+            <div className="metrics-grid">
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Server Summary</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile label="Name" value={data?.name || "-"} />
+                        <InfoTile label="IP" value={data?.ip || "-"} />
+                        <InfoTile label="Uptime" value={data?.uptime || "-"} />
+                        <InfoTile
+                            label="Processes"
+                            value={processes.count ?? "-"}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>CPU & Memory</h3>
+                    </div>
+                    <DiagnosticMessage text={cpuError || memoryError} />
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="CPU Usage"
+                            value={formatPercent(cpu.usage_percent)}
+                        />
+                        <InfoTile
+                            label="Load 1m"
+                            value={cpu.load_average?.["1m"] ?? "-"}
+                        />
+                        <InfoTile
+                            label="Memory Used"
+                            value={formatMegabytes(memory.used_mb)}
+                        />
+                        <InfoTile
+                            label="Memory Usage"
+                            value={formatPercent(memory.usage_percent)}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Network Health</h3>
+                    </div>
+                    <DiagnosticMessage text={networkError || ping.error} />
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Interface"
+                            value={network?.iface || "-"}
+                        />
+                        <InfoTile
+                            label="Avg Latency"
+                            value={formatLatency(ping.avg_latency_ms)}
+                        />
+                        <InfoTile
+                            label="Packet Loss"
+                            value={formatPercent(ping.packet_loss_percent)}
+                        />
+                        <InfoTile
+                            label="Packets Sent"
+                            value={ping.sent ?? "-"}
+                        />
+                        <InfoTile
+                            label="Packets Received"
+                            value={ping.received ?? "-"}
+                        />
+                        <InfoTile
+                            label="RX Bytes"
+                            value={formatBytes(network?.rx_bytes)}
+                        />
+                        <InfoTile
+                            label="TX Bytes"
+                            value={formatBytes(network?.tx_bytes)}
+                        />
+                        <InfoTile
+                            label="RX Packets"
+                            value={network?.rx_packets ?? "-"}
+                        />
+                        <InfoTile
+                            label="TX Packets"
+                            value={network?.tx_packets ?? "-"}
+                        />
+                    </div>
+                </div>
+
+                {/* <div className="card metrics-grid-span-3">
+                    <div className="card-title-row">
+                        <h3>Disk Usage</h3>
+                    </div>
+                    <DiagnosticMessage text={diskError} />
+                    <div className="disk-list">
+                        {disks.length ? (
+                            disks.map((disk) => (
+                                <div className="disk-row" key={disk.index}>
+                                    <div>
+                                        <strong>
+                                            {disk.mount || `Disk ${disk.index}`}
+                                        </strong>
+                                        <span className="disk-type">
+                                            {disk.storage_type || "storage"}
+                                        </span>
+                                        <span>
+                                            {formatBytes(disk.used_bytes)} /{" "}
+                                            {formatBytes(disk.total_bytes)}
+                                        </span>
+                                    </div>
+                                    <strong>
+                                        {formatPercent(disk.usage_percent)}
+                                    </strong>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="empty-state">
+                                No disk metrics available.
+                            </div>
+                        )}
+                    </div>
+                </div> */}
+            </div>
+        </section>
+    );
+}
+
+function NetworkDeviceMetricsPanel({
+    data,
+    title,
+    description,
+    itemLabel = "Interface",
+}) {
+    const metrics = data?.host_metrics || {};
+    const cpu = metrics.cpu || {};
+    const memory = metrics.memory || {};
+    const physicalPorts = data?.physical_ports || {};
+    const ports = Array.isArray(physicalPorts.ports) ? physicalPorts.ports : [];
+    const ping = data?.ping || {};
+    const totals = physicalPorts.totals || {};
+
+    return (
+        <section className="metrics-section">
+            <div className="section-heading">
+                <div>
+                    <h2>{title}</h2>
+                    <p>{description}</p>
+                </div>
+                <span
+                    className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}
+                >
+                    {data?.status || "-"}
+                </span>
+            </div>
+
+            <div className="metrics-grid">
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>CPU & Memory</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="CPU Usage"
+                            value={formatPercent(cpu.usage_percent)}
+                        />
+                        <InfoTile
+                            label="Memory Usage"
+                            value={formatPercent(memory.usage_percent)}
+                        />
+                        <InfoTile
+                            label="Memory Used"
+                            value={formatMegabytes(memory.used_mb)}
+                        />
+                        <InfoTile
+                            label="Memory Total"
+                            value={formatMegabytes(memory.total_mb)}
+                        />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>{itemLabel} Status</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label={`Total ${itemLabel}s`}
+                            value={physicalPorts.total_physical_ports ?? "-"}
+                        />
+                        <InfoTile
+                            label={`${itemLabel}s Up`}
+                            value={physicalPorts.up_physical_ports ?? "-"}
+                        />
+                        <InfoTile
+                            label={`${itemLabel}s Down`}
+                            value={physicalPorts.down_physical_ports ?? "-"}
+                        />
+                        <InfoTile label="Uptime" value={data?.uptime || "-"} />
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-title-row">
+                        <h3>Latency & Loss</h3>
+                    </div>
+                    <DiagnosticMessage text={ping.error} />
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Avg Latency"
+                            value={formatLatency(ping.avg_latency_ms)}
+                        />
+                        <InfoTile
+                            label="Packet Loss"
+                            value={formatPercent(ping.packet_loss_percent)}
+                        />
+                        <InfoTile
+                            label="Packets Sent"
+                            value={ping.sent ?? "-"}
+                        />
+                        <InfoTile
+                            label="Packets Received"
+                            value={ping.received ?? "-"}
+                        />
+                    </div>
+                </div>
+
+                {/* <div className="card">
+                    <div className="card-title-row">
+                        <h3>Errors & Discards</h3>
+                    </div>
+                    <div className="metrics-list">
+                        <InfoTile
+                            label="Input Errors"
+                            value={totals.in_errors ?? "-"}
+                        />
+                        <InfoTile
+                            label="Output Errors"
+                            value={totals.out_errors ?? "-"}
+                        />
+                        <InfoTile
+                            label="Input Discards"
+                            value={totals.in_discards ?? "-"}
+                        />
+                        <InfoTile
+                            label="Output Discards"
+                            value={totals.out_discards ?? "-"}
+                        />
+                    </div>
+                </div> */}
+
+                {/* <div className="card metrics-grid-span-3">
+                    <div className="card-title-row">
+                        <h3>{itemLabel} Traffic & Status</h3>
+                    </div>
+                    <div className="router-port-list">
+                        {ports.length ? (
+                            ports.map((port) => (
+                                <div
+                                    className="router-port-row network-port-row"
+                                    key={port.port_index}
+                                >
+                                    <div>
+                                        <strong>{port.port_name}</strong>
+                                        <span>
+                                            Index {port.port_index} | Admin{" "}
+                                            {port.admin_status_label || "-"} |
+                                            Oper {port.oper_status_label || "-"}
+                                        </span>
+                                    </div>
+                                    <div className="network-port-stats">
+                                        <span>
+                                            Speed{" "}
+                                            {formatBandwidth(port.speed_mbps)}
+                                        </span>
+                                        <span>
+                                            In {formatBytes(port.in_octets)} /
+                                            Out {formatBytes(port.out_octets)}
+                                        </span>
+                                        <span>
+                                            Err {port.in_errors ?? "-"} /{" "}
+                                            {port.out_errors ?? "-"} | Discard{" "}
+                                            {port.in_discards ?? "-"} /{" "}
+                                            {port.out_discards ?? "-"}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="empty-state">
+                                No physical {itemLabel.toLowerCase()} data
+                                available.
+                            </div>
+                        )}
+                    </div>
+                </div> */}
             </div>
         </section>
     );
@@ -1142,29 +1420,11 @@ export default function App() {
             />
 
             <div className="device-grid">
-                <DeviceCard
-                    title="Router"
-                    data={nodes.router}
-                    onClick={() => setSshDevice(sshTargets.router)}
-                />
-                <DeviceCard
-                    title="Switch"
-                    data={nodes.switch}
-                    onClick={() => setSshDevice(sshTargets.switch)}
-                />
-                <DeviceCard
-                    title="Ubuntu Laptop"
-                    data={laptopNode}
-                    onClick={() => setSshDevice(sshTargets.laptop)}
-                />
-                <DeviceCard
-                    title="Server"
-                    data={serverNode}
-                    onClick={() => setSshDevice(sshTargets.server)}
-                />
+                <DeviceCard title="Router" data={nodes.router} />
+                <DeviceCard title="Switch" data={nodes.switch} />
+                <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
+                <DeviceCard title="Server" data={serverNode} />
             </div>
-
-            <RouterPortsCard data={routerPortsData} />
 
             <div className="link-grid">
                 <LinkCard
@@ -1182,17 +1442,29 @@ export default function App() {
                 />
             </div>
 
+            <NetworkDeviceMetricsPanel
+                data={nodes.router}
+                title="Router Metrics"
+                description="CPU, memory, interface traffic, interface status, packet loss, latency, and uptime."
+                itemLabel="Interface"
+            />
+
+            <NetworkDeviceMetricsPanel
+                data={nodes.switch}
+                title="Switch Metrics"
+                description="Port status, per-port traffic, errors, discards, CPU, memory, and uptime."
+                itemLabel="Port"
+            />
+
+            <RouterPortsCard data={routerPortsData} />
+
             <HostMetricsPanel
                 data={laptopNode}
                 title="Laptop Metrics"
                 description="Detailed laptop telemetry from `/api/host-metrics/`"
             />
 
-            <HostMetricsPanel
-                data={serverNode}
-                title="Server Metrics"
-                description="Live SNMP telemetry for the server at `10.10.10.252`"
-            />
+            <ServerRealtimeMetricsPanel data={serverNode} />
 
             {sshDevice ? (
                 <SshTerminalModal

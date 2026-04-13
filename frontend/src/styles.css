@@ -91,6 +91,10 @@ p {
     gap: 16px;
 }
 
+.metrics-grid-span-3 {
+    grid-column: 1 / -1;
+}
+
 .router-ports-summary {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -145,6 +149,18 @@ p {
 }
 
 .router-port-row span:not(.pill) {
+    color: #93a4bf;
+    font-size: 0.92rem;
+}
+
+.network-port-row {
+    align-items: flex-start;
+}
+
+.network-port-stats {
+    display: grid;
+    gap: 6px;
+    text-align: right;
     color: #93a4bf;
     font-size: 0.92rem;
 }
@@ -270,19 +286,23 @@ p {
     font: 13px/1.45 monospace;
 }
 
-.ssh-plain-input-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 12px;
+.ssh-plain-input-form {
+    display: block;
 }
 
-.ssh-plain-input-row input {
+.ssh-plain-command-input {
     width: 100%;
     border: 1px solid rgba(148, 163, 184, 0.22);
     border-radius: 12px;
     padding: 10px 12px;
     background: rgba(15, 23, 42, 0.75);
     color: #e2e8f0;
+    font: 13px/1.45 monospace;
+}
+
+.ssh-plain-command-input:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
 }
 
 .diagnostic-message {
