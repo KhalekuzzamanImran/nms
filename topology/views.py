@@ -10,7 +10,55 @@ from .snmp import (
     poll_device,
     poll_host_metrics,
     poll_link_side,
+    walk_router_physical_interfaces,
 )
+
+def empty_link_side() -> dict:
+    return {
+        "port_index": None,
+        "port_name": None,
+        "admin_status": None,
+        "admin_status_label": "unknown",
+        "oper_status": None,
+        "oper_status_label": "unknown",
+        "speed_mbps": None,
+        "last_change": None,
+        "in_octets": None,
+        "out_octets": None,
+        "in_errors": None,
+        "out_errors": None,
+    }
+
+def empty_host_metrics() -> dict:
+    return {
+        "cpu": {
+            "usage_percent": None,
+            "load_average": {
+                "1m": None,
+                "5m": None,
+                "15m": None,
+            },
+        },
+        "memory": {
+            "total_mb": None,
+            "available_mb": None,
+            "used_mb": None,
+            "usage_percent": None,
+            "swap_total_mb": None,
+            "swap_available_mb": None,
+            "swap_used_mb": None,
+            "swap_usage_percent": None,
+        },
+        "disk": [],
+        "disk_error": "Host is down",
+        "processes": {
+            "count": None,
+        },
+        "wifi": None,
+        "wifi_error": "Host is down",
+        "gpu": None,
+        "gpu_error": "Host is down",
+    }
 
 def build_host_node(
     ip: str,
@@ -20,6 +68,10 @@ def build_host_node(
     include_optional_metric_errors: bool = True,
 ) -> dict:
     host = poll_device(ip, community)
+    if host["status"] != "up":
+        host["host_metrics"] = empty_host_metrics()
+        return host
+
     host["host_metrics"] = poll_host_metrics(
         ip,
         community,
@@ -49,21 +101,43 @@ def topology_view(request):
     community = settings.SNMP_COMMUNITY
 
     router = poll_device(settings.ROUTER_IP, community)
+    router["physical_ports"] = (
+        walk_router_physical_interfaces(settings.ROUTER_IP, community)
+        if router["status"] == "up"
+        else {
+            "total_physical_ports": 0,
+            "up_physical_ports": 0,
+            "down_physical_ports": 0,
+            "ports": [],
+        }
+    )
     switch = poll_device(settings.SWITCH_IP, community)
     laptop = build_laptop_host_metrics(community)
     server = build_server_host_metrics(community)
 
-    router_to_switch_router_side = poll_link_side(
-        settings.ROUTER_IP, community, settings.ROUTER_TO_SWITCH_ROUTER_PORT_INDEX
+    router_to_switch_router_side = (
+        poll_link_side(
+            settings.ROUTER_IP, community, settings.ROUTER_TO_SWITCH_ROUTER_PORT_INDEX
+        )
+        if router["status"] == "up"
+        else empty_link_side()
     )
-    router_to_switch_switch_side = poll_link_side(
-        settings.SWITCH_IP, community, settings.ROUTER_TO_SWITCH_SWITCH_PORT_INDEX
+    router_to_switch_switch_side = (
+        poll_link_side(
+            settings.SWITCH_IP, community, settings.ROUTER_TO_SWITCH_SWITCH_PORT_INDEX
+        )
+        if switch["status"] == "up"
+        else empty_link_side()
     )
 
     discovered_port_index = None
     discovery_method = "none"
 
-    if settings.AUTO_DISCOVER_LAPTOP_SWITCH_PORT:
+    if (
+        settings.AUTO_DISCOVER_LAPTOP_SWITCH_PORT
+        and switch["status"] == "up"
+        and laptop["status"] == "up"
+    ):
         candidate_port = discover_switch_port_for_laptop(
             settings.SWITCH_IP,
             settings.LAPTOP_IP,
@@ -86,25 +160,16 @@ def topology_view(request):
 
     switch_to_laptop_switch_side = (
         poll_link_side(settings.SWITCH_IP, community, discovered_port_index)
-        if discovered_port_index is not None
-        else {
-            "port_index": None,
-            "port_name": None,
-            "admin_status": None,
-            "admin_status_label": "unknown",
-            "oper_status": None,
-            "oper_status_label": "unknown",
-            "speed_mbps": None,
-            "last_change": None,
-            "in_octets": None,
-            "out_octets": None,
-            "in_errors": None,
-            "out_errors": None,
-        }
+        if switch["status"] == "up" and discovered_port_index is not None
+        else empty_link_side()
     )
 
     router_to_server_port_index = None
-    if getattr(settings, "AUTO_DISCOVER_SERVER_ROUTER_PORT", False):
+    if (
+        getattr(settings, "AUTO_DISCOVER_SERVER_ROUTER_PORT", False)
+        and router["status"] == "up"
+        and server["status"] == "up"
+    ):
         router_to_server_port_index = discover_router_port_for_host(
             settings.ROUTER_IP,
             settings.SERVER_IP,
@@ -113,21 +178,8 @@ def topology_view(request):
 
     router_to_server_router_side = (
         poll_link_side(settings.ROUTER_IP, community, router_to_server_port_index)
-        if router_to_server_port_index is not None
-        else {
-            "port_index": None,
-            "port_name": None,
-            "admin_status": None,
-            "admin_status_label": "unknown",
-            "oper_status": None,
-            "oper_status_label": "unknown",
-            "speed_mbps": None,
-            "last_change": None,
-            "in_octets": None,
-            "out_octets": None,
-            "in_errors": None,
-            "out_errors": None,
-        }
+        if router["status"] == "up" and router_to_server_port_index is not None
+        else empty_link_side()
     )
 
     router_switch_up = (
@@ -196,4 +248,24 @@ def host_metrics_view(request):
     return Response({
         "node": laptop,
         "host_metrics": laptop["host_metrics"],
+    })
+
+@api_view(["GET"])
+def router_ports_view(request):
+    community = settings.SNMP_COMMUNITY
+    router = poll_device(settings.ROUTER_IP, community)
+    physical_ports = (
+        walk_router_physical_interfaces(settings.ROUTER_IP, community)
+        if router["status"] == "up"
+        else {
+            "total_physical_ports": 0,
+            "up_physical_ports": 0,
+            "down_physical_ports": 0,
+            "ports": [],
+        }
+    )
+
+    return Response({
+        "router": router,
+        "physical_ports": physical_ports,
     })

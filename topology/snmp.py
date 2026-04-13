@@ -12,6 +12,22 @@ HOST_RESOURCES_STORAGE_TYPES = {
     "1.3.6.1.2.1.25.2.1.7": "flash_memory",
 }
 NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.1.2"
+PHYSICAL_INTERFACE_TYPES = {
+    6,    # ethernetCsmacd
+    62,   # fastEther
+    69,   # fastEtherFX
+    117,  # gigabitEthernet
+}
+NON_PHYSICAL_NAME_HINTS = (
+    "loopback",
+    "vlan",
+    "tunnel",
+    "null",
+    "dialer",
+    "bvi",
+    "svi",
+    "virtual",
+)
 
 @dataclass
 class SnmpResult:
@@ -99,6 +115,14 @@ def oper_label(value: Optional[int]) -> str:
 
 def admin_label(value: Optional[int]) -> str:
     return {1: "up", 2: "down", 3: "testing"}.get(value, "unknown")
+
+def is_probably_physical_interface(name: Optional[str], if_type: Optional[int]) -> bool:
+    if if_type not in PHYSICAL_INTERFACE_TYPES:
+        return False
+    normalized_name = (name or "").strip().lower()
+    if not normalized_name:
+        return False
+    return not any(hint in normalized_name for hint in NON_PHYSICAL_NAME_HINTS)
 
 def poll_device(ip: str, community: str) -> dict:
     name = run_snmpget(ip, community, "1.3.6.1.2.1.1.5.0")
@@ -303,6 +327,45 @@ def fallback_discover_access_port(switch_ip: str, community: str, switch_uplink_
             best_score = score
             best_idx = idx
     return best_idx
+
+def walk_router_physical_interfaces(router_ip: str, community: str) -> dict:
+    names = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.31.1.1.1.1")
+    descriptions = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.2.2.1.2")
+    types = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.2.2.1.3")
+    admin = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.2.2.1.7")
+    oper = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.2.2.1.8")
+    speed = walk_suffix_map(router_ip, community, "1.3.6.1.2.1.31.1.1.1.15")
+
+    physical_ports = []
+    for index_text, type_value in types.items():
+        index = extract_integer(index_text)
+        if index is None:
+            continue
+
+        port_name = extract_string(names.get(index_text)) or extract_string(descriptions.get(index_text))
+        if_type = extract_integer(type_value)
+        if not is_probably_physical_interface(port_name, if_type):
+            continue
+
+        admin_status = extract_integer(admin.get(index_text))
+        oper_status = extract_integer(oper.get(index_text))
+        physical_ports.append({
+            "port_index": index,
+            "port_name": port_name or f"port-{index}",
+            "admin_status": admin_status,
+            "admin_status_label": admin_label(admin_status),
+            "oper_status": oper_status,
+            "oper_status_label": oper_label(oper_status),
+            "speed_mbps": extract_integer(speed.get(index_text)),
+        })
+
+    physical_ports.sort(key=lambda port: port["port_index"])
+    return {
+        "total_physical_ports": len(physical_ports),
+        "up_physical_ports": sum(1 for port in physical_ports if port["oper_status"] == 1),
+        "down_physical_ports": sum(1 for port in physical_ports if port["oper_status"] != 1),
+        "ports": physical_ports,
+    }
 
 def poll_disk_usage(ip: str, community: str) -> Tuple[List[dict], Optional[str]]:
     raw_storage_types, storage_type_error = safe_snmpwalk_map(ip, community, "1.3.6.1.2.1.25.2.3.1.2")

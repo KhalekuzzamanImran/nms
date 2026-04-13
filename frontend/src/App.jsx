@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import laptopImage from "./assets/laptop.svg";
-import routerImage from "./assets/router.svg";
+import routerSvgTemplate from "./assets/router.svg?raw";
 import serverImage from "./assets/server.svg";
 import switchImage from "./assets/switch.svg";
 
@@ -8,6 +8,7 @@ const API_BASE_URL =
     import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
 const HOST_METRICS_API_URL = `${API_BASE_URL}/api/host-metrics/`;
+const ROUTER_PORTS_API_URL = `${API_BASE_URL}/api/router-ports/`;
 
 function DeviceCard({ title, data }) {
     const online = data?.status === "up";
@@ -81,6 +82,86 @@ function InfoTile({ label, value }) {
 function DiagnosticMessage({ text }) {
     if (!text) return null;
     return <div className="diagnostic-message">{text}</div>;
+}
+
+function RouterPortsCard({ data }) {
+    const router = data?.router;
+    const physicalPorts = data?.physical_ports;
+    const ports = Array.isArray(physicalPorts?.ports) ? physicalPorts.ports : [];
+    const upPorts = ports.filter((port) => port.oper_status === 1);
+    const downPorts = ports.filter((port) => port.oper_status !== 1);
+
+    function formatPortList(portList) {
+        if (!portList.length) return "-";
+        return portList
+            .map((port) => `${port.port_name} (#${port.port_index})`)
+            .join(", ");
+    }
+
+    return (
+        <section className="metrics-section">
+            <div className="section-heading">
+                <div>
+                    <h2>Router Physical Ports</h2>
+                    <p>Physical interface count and current up/down state</p>
+                </div>
+                <span className={`pill ${router?.status === "up" ? "pill-green" : "pill-red"}`}>
+                    {router?.status || "-"}
+                </span>
+            </div>
+
+            <div className="router-ports-summary">
+                <InfoTile
+                    label="Total Ports"
+                    value={physicalPorts?.total_physical_ports ?? "-"}
+                />
+                <InfoTile
+                    label="Ports Up"
+                    value={physicalPorts?.up_physical_ports ?? "-"}
+                />
+                <InfoTile
+                    label="Ports Down"
+                    value={physicalPorts?.down_physical_ports ?? "-"}
+                />
+            </div>
+
+            <div className="card">
+                <div className="card-title-row">
+                    <h3>Physical Port Status</h3>
+                </div>
+                <div className="router-port-groups">
+                    <div className="router-port-group">
+                        <strong>Up Ports</strong>
+                        <span>{formatPortList(upPorts)}</span>
+                    </div>
+                    <div className="router-port-group">
+                        <strong>Down Ports</strong>
+                        <span>{formatPortList(downPorts)}</span>
+                    </div>
+                </div>
+                <div className="router-port-list">
+                    {ports.length ? (
+                        ports.map((port) => {
+                            const up = port.oper_status === 1;
+                            return (
+                                <div className="router-port-row" key={port.port_index}>
+                                    <div>
+                                        <strong>{port.port_name}</strong>
+                                        <span>Index {port.port_index}</span>
+                                    </div>
+                                    <span className={`pill ${up ? "pill-green" : "pill-red"}`}>
+                                        {port.oper_status_label || "unknown"}
+                                    </span>
+                                </div>
+                            );
+                        })
+                    ) : (
+                        <div className="empty-state">No physical router ports found.</div>
+                    )}
+                </div>
+            </div>
+        </section>
+    );
 }
 
 function HostMetricsPanel({
@@ -396,6 +477,104 @@ function DeviceNode({ title, imageSrc, imageAlt, accent = "mint", className = ""
     );
 }
 
+const ROUTER_PORT_SLOT_PATH = "M0 4.419V1.466L2.544 0V2.952L0 4.419Z";
+const ROUTER_PORT_ROWS = {
+    lower: {
+        start: { x: 63.7041, y: 163.113 },
+        end: { x: 107.021, y: 138.103 },
+    },
+    upper: {
+        start: { x: 67.45, y: 160.95 },
+        end: { x: 110.75, y: 135.95 },
+    },
+};
+
+function getRouterPortFill(port) {
+    return port.oper_status === 1
+        ? "#1eb980"
+        : port.oper_status === 2
+          ? "#ef476f"
+          : "url(#paint12_linear_1984_18161)";
+}
+
+function buildRouterPortRowData(ports, rowGeometry, minScale, maxScale) {
+    if (!ports.length) return [];
+
+    const count = ports.length;
+    const spanX = rowGeometry.end.x - rowGeometry.start.x;
+    const spanY = rowGeometry.end.y - rowGeometry.start.y;
+    const usableRatio = count === 1 ? 0 : Math.min(0.92, 0.62 + count * 0.035);
+    const paddingRatio = (1 - usableRatio) / 2;
+    const stepX = count > 1 ? (spanX * usableRatio) / (count - 1) : spanX;
+    const scale = Math.max(minScale, Math.min(maxScale, stepX / 4.9));
+
+    return ports.map((port, index) => {
+            const positionRatio =
+                count === 1
+                    ? 0.5
+                    : paddingRatio + (usableRatio * index) / (count - 1);
+            return {
+                ...port,
+                x: rowGeometry.start.x + spanX * positionRatio,
+                y: rowGeometry.start.y + spanY * positionRatio,
+                scale,
+                fill: getRouterPortFill(port),
+            };
+        });
+}
+
+function buildRouterPortData(ports) {
+    if (!ports.length) return [];
+
+    const count = ports.length;
+    if (count <= 8) {
+        return buildRouterPortRowData(
+            ports,
+            ROUTER_PORT_ROWS.lower,
+            0.82,
+            1,
+        );
+    }
+
+    const upperCount = Math.ceil(count / 2);
+    const lowerCount = count - upperCount;
+    const upperPorts = ports.slice(0, upperCount);
+    const lowerPorts = ports.slice(upperCount, upperCount + lowerCount);
+
+    return [
+        ...buildRouterPortRowData(upperPorts, ROUTER_PORT_ROWS.upper, 0.58, 0.88),
+        ...buildRouterPortRowData(lowerPorts, ROUTER_PORT_ROWS.lower, 0.58, 0.88),
+    ];
+}
+
+function buildRouterPortsMarkup(portData) {
+    return portData
+        .map((port) => {
+            return `<path fill-rule="evenodd" clip-rule="evenodd" d="${ROUTER_PORT_SLOT_PATH}" transform="translate(${port.x.toFixed(3)} ${port.y.toFixed(3)}) scale(${port.scale.toFixed(3)})" fill="${port.fill}"/>`;
+        })
+        .join("");
+}
+
+function RouterDeviceNode({ title, ports = [], className = "" }) {
+    const portData = buildRouterPortData(ports);
+    const svgMarkup = routerSvgTemplate.replace(
+        "__ROUTER_PORTS__",
+        buildRouterPortsMarkup(portData),
+    );
+
+    return (
+        <article className={`topology-device ${className}`.trim()}>
+            <div
+                className="flow-icon-shell-blue router-svg-shell"
+                role="img"
+                aria-label={title}
+                dangerouslySetInnerHTML={{ __html: svgMarkup }}
+            />
+            <h4>{title}</h4>
+        </article>
+    );
+}
+
 function StatusInfoBox({ title, status, metrics = [], className = "" }) {
     const online = status === "up";
 
@@ -427,6 +606,9 @@ function TopologyMap({ nodes, links }) {
     const routerSwitchSide = getPrimarySide(links?.router_to_switch);
     const switchLaptopSide = getPrimarySide(links?.switch_to_laptop);
     const routerServerSide = getPrimarySide(links?.router_to_server);
+    const routerPorts = Array.isArray(nodes?.router?.physical_ports?.ports)
+        ? nodes.router.physical_ports.ports
+        : [];
 
     return (
         <section className="traffic-flow-card">
@@ -460,12 +642,10 @@ function TopologyMap({ nodes, links }) {
                     ]}
                 />
 
-                <DeviceNode
+                <RouterDeviceNode
                     className="topology-router-device"
                     title="Router"
-                    imageSrc={routerImage}
-                    imageAlt="Router"
-                    accent="blue"
+                    ports={routerPorts}
                 />
 
                 <div className="topology-link topology-link-horizontal">
@@ -599,23 +779,28 @@ function TopologyMap({ nodes, links }) {
 export default function App() {
     const [topologyData, setTopologyData] = useState(null);
     const [hostMetricsData, setHostMetricsData] = useState(null);
+    const [routerPortsData, setRouterPortsData] = useState(null);
     const [loading, setLoading] = useState(true);
 
     async function load() {
         try {
-            const [topologyRes, hostMetricsRes] = await Promise.all([
+            const [topologyRes, hostMetricsRes, routerPortsRes] = await Promise.all([
                 fetch(TOPOLOGY_API_URL),
                 fetch(HOST_METRICS_API_URL),
+                fetch(ROUTER_PORTS_API_URL),
             ]);
-            const [topologyJson, hostMetricsJson] = await Promise.all([
+            const [topologyJson, hostMetricsJson, routerPortsJson] = await Promise.all([
                 topologyRes.json(),
                 hostMetricsRes.json(),
+                routerPortsRes.json(),
             ]);
             setTopologyData(topologyJson);
             setHostMetricsData(hostMetricsJson);
+            setRouterPortsData(routerPortsJson);
         } catch (e) {
             setTopologyData(null);
             setHostMetricsData(null);
+            setRouterPortsData(null);
         } finally {
             setLoading(false);
         }
@@ -650,6 +835,8 @@ export default function App() {
                 <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
                 <DeviceCard title="Server" data={serverNode} />
             </div>
+
+            <RouterPortsCard data={routerPortsData} />
 
             <div className="link-grid">
                 <LinkCard
