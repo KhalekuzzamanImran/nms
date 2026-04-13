@@ -1,5 +1,17 @@
 import os
-from django.core.asgi import get_asgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-application = get_wsgi_application()
+
+from django.core.asgi import get_asgi_application
+
+from topology.ssh_gateway import ssh_websocket_application
+
+django_asgi_app = get_asgi_application()
+
+
+async def application(scope, receive, send):
+    if scope["type"] == "websocket":
+        await ssh_websocket_application(scope, receive, send)
+        return
+
+    await django_asgi_app(scope, receive, send)

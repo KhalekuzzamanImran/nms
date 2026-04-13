@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Terminal } from "xterm";
+import "xterm/css/xterm.css";
 import laptopImage from "./assets/laptop.svg";
 import routerSvgTemplate from "./assets/router.svg?raw";
-import serverImage from "./assets/server.svg";
+import serverImage from "./assets/server1.svg";
 import switchImage from "./assets/switch.svg";
 
 const API_BASE_URL =
@@ -9,11 +11,16 @@ const API_BASE_URL =
 const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
 const HOST_METRICS_API_URL = `${API_BASE_URL}/api/host-metrics/`;
 const ROUTER_PORTS_API_URL = `${API_BASE_URL}/api/router-ports/`;
+const SSH_SESSION_API_URL = `${API_BASE_URL}/api/ssh/session/`;
 
-function DeviceCard({ title, data }) {
+function DeviceCard({ title, data, onClick }) {
     const online = data?.status === "up";
     return (
-        <div className={`card device ${online ? "online" : "offline"}`}>
+        <button
+            type="button"
+            className={`card device device-card-button ${online ? "online" : "offline"}`}
+            onClick={onClick}
+        >
             <div className="card-title-row">
                 <h2>{title}</h2>
                 <span className={`pill ${online ? "pill-green" : "pill-red"}`}>
@@ -37,7 +44,7 @@ function DeviceCard({ title, data }) {
                     <strong>Error:</strong> {data.error}
                 </div>
             ) : null}
-        </div>
+        </button>
     );
 }
 
@@ -87,7 +94,9 @@ function DiagnosticMessage({ text }) {
 function RouterPortsCard({ data }) {
     const router = data?.router;
     const physicalPorts = data?.physical_ports;
-    const ports = Array.isArray(physicalPorts?.ports) ? physicalPorts.ports : [];
+    const ports = Array.isArray(physicalPorts?.ports)
+        ? physicalPorts.ports
+        : [];
     const upPorts = ports.filter((port) => port.oper_status === 1);
     const downPorts = ports.filter((port) => port.oper_status !== 1);
 
@@ -105,7 +114,9 @@ function RouterPortsCard({ data }) {
                     <h2>Router Physical Ports</h2>
                     <p>Physical interface count and current up/down state</p>
                 </div>
-                <span className={`pill ${router?.status === "up" ? "pill-green" : "pill-red"}`}>
+                <span
+                    className={`pill ${router?.status === "up" ? "pill-green" : "pill-red"}`}
+                >
                     {router?.status || "-"}
                 </span>
             </div>
@@ -144,23 +155,271 @@ function RouterPortsCard({ data }) {
                         ports.map((port) => {
                             const up = port.oper_status === 1;
                             return (
-                                <div className="router-port-row" key={port.port_index}>
+                                <div
+                                    className="router-port-row"
+                                    key={port.port_index}
+                                >
                                     <div>
                                         <strong>{port.port_name}</strong>
                                         <span>Index {port.port_index}</span>
                                     </div>
-                                    <span className={`pill ${up ? "pill-green" : "pill-red"}`}>
+                                    <span
+                                        className={`pill ${up ? "pill-green" : "pill-red"}`}
+                                    >
                                         {port.oper_status_label || "unknown"}
                                     </span>
                                 </div>
                             );
                         })
                     ) : (
-                        <div className="empty-state">No physical router ports found.</div>
+                        <div className="empty-state">
+                            No physical router ports found.
+                        </div>
                     )}
                 </div>
             </div>
         </section>
+    );
+}
+
+function buildWebSocketUrl(path, token) {
+    const base = API_BASE_URL.replace(/^http/, "ws").replace(/\/$/, "");
+    return `${base}${path}?token=${encodeURIComponent(token)}`;
+}
+
+function SshTerminalModal({ device, onClose }) {
+    const terminalHostRef = useRef(null);
+    const terminalRef = useRef(null);
+    const socketRef = useRef(null);
+    const plainOutputRef = useRef(null);
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
+    const [connecting, setConnecting] = useState(false);
+    const [error, setError] = useState("");
+    const [terminalMode, setTerminalMode] = useState("loading");
+    const [plainOutput, setPlainOutput] = useState("");
+    const [plainInput, setPlainInput] = useState("");
+
+    function appendOutput(text) {
+        if (terminalRef.current) {
+            terminalRef.current.write(text);
+            terminalRef.current.scrollToBottom();
+            return;
+        }
+        setPlainOutput((current) => `${current}${text}`);
+    }
+
+    function resetOutput(text) {
+        if (terminalRef.current) {
+            terminalRef.current.clear();
+            terminalRef.current.write(text);
+            terminalRef.current.scrollToBottom();
+            return;
+        }
+        setPlainOutput(text);
+    }
+
+    useEffect(() => {
+        try {
+            if (terminalHostRef.current && !terminalRef.current) {
+                const terminal = new Terminal({
+                    cursorBlink: true,
+                    fontSize: 13,
+                    rows: 18,
+                    cols: 80,
+                    scrollback: 5000,
+                    theme: {
+                        background: "#081120",
+                        foreground: "#e2e8f0",
+                    },
+                });
+                terminal.open(terminalHostRef.current);
+                terminal.writeln(
+                    `SSH target: ${device.title} (${device.ip || "unknown"})`,
+                );
+                terminal.writeln("Enter credentials, then click Connect.");
+                terminal.scrollToBottom();
+                terminal.focus();
+                terminalRef.current = terminal;
+                setTerminalMode("xterm");
+            }
+        } catch (terminalError) {
+            setTerminalMode("plain");
+            setPlainOutput(
+                `SSH target: ${device.title} (${device.ip || "unknown"})\nEnter credentials, then click Connect.\n\nxterm could not be initialized, so plain terminal mode is being used.\n`,
+            );
+            setError(`${terminalError.message}. Using plain terminal mode.`);
+        }
+
+        return () => {
+            if (socketRef.current) {
+                socketRef.current.close();
+                socketRef.current = null;
+            }
+            if (terminalRef.current) {
+                terminalRef.current.dispose();
+                terminalRef.current = null;
+            }
+        };
+    }, [device]);
+
+    async function handleConnect(event) {
+        event.preventDefault();
+        setConnecting(true);
+        setError("");
+
+        try {
+            const response = await fetch(SSH_SESSION_API_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    device: device.id,
+                    username,
+                    password,
+                }),
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+                throw new Error(
+                    payload.detail || "Unable to create SSH session.",
+                );
+            }
+
+            resetOutput(
+                `Connecting to ${payload.device.name} (${payload.device.host})...\r\n`,
+            );
+
+            const socket = new WebSocket(
+                buildWebSocketUrl(payload.ws_path, payload.token),
+            );
+            socketRef.current = socket;
+
+            socket.onopen = () => {
+                appendOutput("SSH connected.\r\n");
+                if (terminalRef.current) {
+                    terminalRef.current.focus();
+                    terminalRef.current.onData((data) => {
+                        if (socket.readyState === WebSocket.OPEN) {
+                            socket.send(data);
+                        }
+                    });
+                }
+            };
+
+            socket.onmessage = (message) => {
+                appendOutput(message.data);
+            };
+
+            socket.onerror = () => {
+                setError("SSH websocket error.");
+            };
+
+            socket.onclose = () => {
+                appendOutput("\r\nConnection closed.\r\n");
+            };
+        } catch (connectError) {
+            setError(connectError.message);
+        } finally {
+            setConnecting(false);
+        }
+    }
+
+    useEffect(() => {
+        if (plainOutputRef.current) {
+            plainOutputRef.current.scrollTop =
+                plainOutputRef.current.scrollHeight;
+        }
+    }, [plainOutput]);
+
+    function handlePlainInputSubmit(event) {
+        event.preventDefault();
+        if (
+            !plainInput ||
+            !socketRef.current ||
+            socketRef.current.readyState !== WebSocket.OPEN
+        ) {
+            return;
+        }
+        appendOutput(`$ ${plainInput}\r\n`);
+        socketRef.current.send(`${plainInput}\r`);
+        setPlainInput("");
+    }
+
+    return (
+        <div className="ssh-modal-backdrop" onClick={onClose}>
+            <div
+                className="ssh-modal"
+                onClick={(event) => event.stopPropagation()}
+            >
+                <div className="ssh-modal-header">
+                    <div>
+                        <h2>SSH Terminal</h2>
+                        <p>
+                            {device.title} {device.ip ? `(${device.ip})` : ""}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        className="ssh-close-button"
+                        onClick={onClose}
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <form className="ssh-credential-form" onSubmit={handleConnect}>
+                    <input
+                        type="text"
+                        placeholder="Username"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        required
+                    />
+                    <input
+                        type="password"
+                        placeholder="Password"
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        required
+                    />
+                    <button type="submit" disabled={connecting}>
+                        {connecting ? "Connecting..." : "Connect"}
+                    </button>
+                </form>
+
+                {error ? <div className="ssh-error">{error}</div> : null}
+
+                {terminalMode === "xterm" ? (
+                    <div
+                        ref={terminalHostRef}
+                        className="ssh-terminal-host"
+                        onClick={() => terminalRef.current?.focus()}
+                    />
+                ) : (
+                    <div className="ssh-plain-terminal">
+                        <pre ref={plainOutputRef} className="ssh-plain-output">
+                            {plainOutput}
+                        </pre>
+                        <form
+                            className="ssh-plain-input-row"
+                            onSubmit={handlePlainInputSubmit}
+                        >
+                            <input
+                                type="text"
+                                placeholder="Type command and press Send"
+                                value={plainInput}
+                                onChange={(event) =>
+                                    setPlainInput(event.target.value)
+                                }
+                            />
+                            <button type="submit">Send</button>
+                        </form>
+                    </div>
+                )}
+            </div>
+        </div>
     );
 }
 
@@ -187,7 +446,9 @@ function HostMetricsPanel({
                     <h2>{title}</h2>
                     <p>{description}</p>
                 </div>
-                <span className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}>
+                <span
+                    className={`pill ${data?.status === "up" ? "pill-green" : "pill-red"}`}
+                >
                     {data?.status || "-"}
                 </span>
             </div>
@@ -275,10 +536,7 @@ function HostMetricsPanel({
                             label="Interface"
                             value={wifi?.iface || "-"}
                         />
-                        <InfoTile
-                            label="SSID"
-                            value={wifi?.ssid || "-"}
-                        />
+                        <InfoTile label="SSID" value={wifi?.ssid || "-"} />
                         <InfoTile
                             label="Signal"
                             value={
@@ -322,7 +580,9 @@ function HostMetricsPanel({
                         />
                         <InfoTile
                             label="Temperature"
-                            value={gpu?.temp_c != null ? `${gpu.temp_c} C` : "-"}
+                            value={
+                                gpu?.temp_c != null ? `${gpu.temp_c} C` : "-"
+                            }
                         />
                     </div>
                 </div>
@@ -337,7 +597,9 @@ function HostMetricsPanel({
                             disks.map((disk) => (
                                 <div className="disk-row" key={disk.index}>
                                     <div>
-                                        <strong>{disk.mount || `Disk ${disk.index}`}</strong>
+                                        <strong>
+                                            {disk.mount || `Disk ${disk.index}`}
+                                        </strong>
                                         <span className="disk-type">
                                             {disk.storage_type || "storage"}
                                         </span>
@@ -352,7 +614,9 @@ function HostMetricsPanel({
                                 </div>
                             ))
                         ) : (
-                            <div className="empty-state">No disk metrics available.</div>
+                            <div className="empty-state">
+                                No disk metrics available.
+                            </div>
                         )}
                     </div>
                 </div>
@@ -462,16 +726,29 @@ function getLinkSpeed(link) {
     );
 }
 
-function DeviceNode({ title, imageSrc, imageAlt, accent = "mint", className = "" }) {
+function DeviceNode({
+    title,
+    imageSrc,
+    imageAlt,
+    accent = "mint",
+    className = "",
+    onClick,
+}) {
     return (
         <article className={`topology-device ${className}`.trim()}>
-            <div className={`flow-icon-shell-${accent}`}>
-                <img
-                    className="flow-icon-image"
-                    src={imageSrc}
-                    alt={imageAlt}
-                />
-            </div>
+            <button
+                type="button"
+                className="topology-device-button"
+                onClick={onClick}
+            >
+                <div className={`flow-icon-shell-${accent}`}>
+                    <img
+                        className="flow-icon-image"
+                        src={imageSrc}
+                        alt={imageAlt}
+                    />
+                </div>
+            </button>
             <h4>{title}</h4>
         </article>
     );
@@ -509,18 +786,18 @@ function buildRouterPortRowData(ports, rowGeometry, minScale, maxScale) {
     const scale = Math.max(minScale, Math.min(maxScale, stepX / 4.9));
 
     return ports.map((port, index) => {
-            const positionRatio =
-                count === 1
-                    ? 0.5
-                    : paddingRatio + (usableRatio * index) / (count - 1);
-            return {
-                ...port,
-                x: rowGeometry.start.x + spanX * positionRatio,
-                y: rowGeometry.start.y + spanY * positionRatio,
-                scale,
-                fill: getRouterPortFill(port),
-            };
-        });
+        const positionRatio =
+            count === 1
+                ? 0.5
+                : paddingRatio + (usableRatio * index) / (count - 1);
+        return {
+            ...port,
+            x: rowGeometry.start.x + spanX * positionRatio,
+            y: rowGeometry.start.y + spanY * positionRatio,
+            scale,
+            fill: getRouterPortFill(port),
+        };
+    });
 }
 
 function buildRouterPortData(ports) {
@@ -528,12 +805,7 @@ function buildRouterPortData(ports) {
 
     const count = ports.length;
     if (count <= 8) {
-        return buildRouterPortRowData(
-            ports,
-            ROUTER_PORT_ROWS.lower,
-            0.82,
-            1,
-        );
+        return buildRouterPortRowData(ports, ROUTER_PORT_ROWS.lower, 0.82, 1);
     }
 
     const upperCount = Math.ceil(count / 2);
@@ -542,8 +814,18 @@ function buildRouterPortData(ports) {
     const lowerPorts = ports.slice(upperCount, upperCount + lowerCount);
 
     return [
-        ...buildRouterPortRowData(upperPorts, ROUTER_PORT_ROWS.upper, 0.58, 0.88),
-        ...buildRouterPortRowData(lowerPorts, ROUTER_PORT_ROWS.lower, 0.58, 0.88),
+        ...buildRouterPortRowData(
+            upperPorts,
+            ROUTER_PORT_ROWS.upper,
+            0.58,
+            0.88,
+        ),
+        ...buildRouterPortRowData(
+            lowerPorts,
+            ROUTER_PORT_ROWS.lower,
+            0.58,
+            0.88,
+        ),
     ];
 }
 
@@ -555,7 +837,7 @@ function buildRouterPortsMarkup(portData) {
         .join("");
 }
 
-function RouterDeviceNode({ title, ports = [], className = "" }) {
+function RouterDeviceNode({ title, ports = [], className = "", onClick }) {
     const portData = buildRouterPortData(ports);
     const svgMarkup = routerSvgTemplate.replace(
         "__ROUTER_PORTS__",
@@ -564,12 +846,18 @@ function RouterDeviceNode({ title, ports = [], className = "" }) {
 
     return (
         <article className={`topology-device ${className}`.trim()}>
-            <div
-                className="flow-icon-shell-blue router-svg-shell"
-                role="img"
-                aria-label={title}
-                dangerouslySetInnerHTML={{ __html: svgMarkup }}
-            />
+            <button
+                type="button"
+                className="topology-device-button"
+                onClick={onClick}
+            >
+                <div
+                    className="flow-icon-shell-blue router-svg-shell"
+                    role="img"
+                    aria-label={title}
+                    dangerouslySetInnerHTML={{ __html: svgMarkup }}
+                />
+            </button>
             <h4>{title}</h4>
         </article>
     );
@@ -599,7 +887,7 @@ function StatusInfoBox({ title, status, metrics = [], className = "" }) {
     );
 }
 
-function TopologyMap({ nodes, links }) {
+function TopologyMap({ nodes, links, onDeviceClick }) {
     const rsUp = links?.router_to_switch?.status === "up";
     const slUp = links?.switch_to_laptop?.status === "up";
     const srvUp = links?.router_to_server?.status === "up";
@@ -646,6 +934,7 @@ function TopologyMap({ nodes, links }) {
                     className="topology-router-device"
                     title="Router"
                     ports={routerPorts}
+                    onClick={() => onDeviceClick("router")}
                 />
 
                 <div className="topology-link topology-link-horizontal">
@@ -668,6 +957,7 @@ function TopologyMap({ nodes, links }) {
                     imageSrc={switchImage}
                     imageAlt="Switch"
                     accent="mint"
+                    onClick={() => onDeviceClick("switch")}
                 />
 
                 <StatusInfoBox
@@ -710,6 +1000,7 @@ function TopologyMap({ nodes, links }) {
                     imageSrc={laptopImage}
                     imageAlt="Laptop"
                     accent="cyan"
+                    onClick={() => onDeviceClick("laptop")}
                 />
 
                 <StatusInfoBox
@@ -751,6 +1042,7 @@ function TopologyMap({ nodes, links }) {
                     imageSrc={serverImage}
                     imageAlt="Server"
                     accent="blue"
+                    onClick={() => onDeviceClick("server")}
                 />
 
                 <StatusInfoBox
@@ -781,19 +1073,22 @@ export default function App() {
     const [hostMetricsData, setHostMetricsData] = useState(null);
     const [routerPortsData, setRouterPortsData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [sshDevice, setSshDevice] = useState(null);
 
     async function load() {
         try {
-            const [topologyRes, hostMetricsRes, routerPortsRes] = await Promise.all([
-                fetch(TOPOLOGY_API_URL),
-                fetch(HOST_METRICS_API_URL),
-                fetch(ROUTER_PORTS_API_URL),
-            ]);
-            const [topologyJson, hostMetricsJson, routerPortsJson] = await Promise.all([
-                topologyRes.json(),
-                hostMetricsRes.json(),
-                routerPortsRes.json(),
-            ]);
+            const [topologyRes, hostMetricsRes, routerPortsRes] =
+                await Promise.all([
+                    fetch(TOPOLOGY_API_URL),
+                    fetch(HOST_METRICS_API_URL),
+                    fetch(ROUTER_PORTS_API_URL),
+                ]);
+            const [topologyJson, hostMetricsJson, routerPortsJson] =
+                await Promise.all([
+                    topologyRes.json(),
+                    hostMetricsRes.json(),
+                    routerPortsRes.json(),
+                ]);
             setTopologyData(topologyJson);
             setHostMetricsData(hostMetricsJson);
             setRouterPortsData(routerPortsJson);
@@ -816,10 +1111,23 @@ export default function App() {
     const links = topologyData?.links || {};
     const laptopNode = hostMetricsData?.node || nodes.laptop;
     const serverNode = nodes.server;
+    const sshTargets = {
+        router: { id: "router", title: "Router", ip: nodes.router?.ip },
+        switch: { id: "switch", title: "Switch", ip: nodes.switch?.ip },
+        laptop: { id: "laptop", title: "Ubuntu Laptop", ip: laptopNode?.ip },
+        server: { id: "server", title: "Server", ip: serverNode?.ip },
+    };
+
+    function openSshDevice(deviceId) {
+        const target = sshTargets[deviceId];
+        if (target) {
+            setSshDevice(target);
+        }
+    }
 
     return (
         <div className="page">
-            <h1>SNMP Topology Dashboard</h1>
+            <h2>SNMP Topology Dashboard</h2>
             <p className="sub">
                 Router, switch, and Ubuntu laptop with dynamic switch-port
                 discovery
@@ -827,13 +1135,33 @@ export default function App() {
 
             {loading && <div>Loading...</div>}
 
-            <TopologyMap nodes={nodes} links={links} />
+            <TopologyMap
+                nodes={nodes}
+                links={links}
+                onDeviceClick={openSshDevice}
+            />
 
             <div className="device-grid">
-                <DeviceCard title="Router" data={nodes.router} />
-                <DeviceCard title="Switch" data={nodes.switch} />
-                <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
-                <DeviceCard title="Server" data={serverNode} />
+                <DeviceCard
+                    title="Router"
+                    data={nodes.router}
+                    onClick={() => setSshDevice(sshTargets.router)}
+                />
+                <DeviceCard
+                    title="Switch"
+                    data={nodes.switch}
+                    onClick={() => setSshDevice(sshTargets.switch)}
+                />
+                <DeviceCard
+                    title="Ubuntu Laptop"
+                    data={laptopNode}
+                    onClick={() => setSshDevice(sshTargets.laptop)}
+                />
+                <DeviceCard
+                    title="Server"
+                    data={serverNode}
+                    onClick={() => setSshDevice(sshTargets.server)}
+                />
             </div>
 
             <RouterPortsCard data={routerPortsData} />
@@ -865,6 +1193,13 @@ export default function App() {
                 title="Server Metrics"
                 description="Live SNMP telemetry for the server at `10.10.10.252`"
             />
+
+            {sshDevice ? (
+                <SshTerminalModal
+                    device={sshDevice}
+                    onClose={() => setSshDevice(null)}
+                />
+            ) : null}
         </div>
     );
 }

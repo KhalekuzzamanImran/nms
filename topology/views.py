@@ -1,5 +1,6 @@
 from django.conf import settings
 from rest_framework.decorators import api_view
+from rest_framework import status
 from rest_framework.response import Response
 
 from .snmp import (
@@ -12,6 +13,7 @@ from .snmp import (
     poll_link_side,
     walk_router_physical_interfaces,
 )
+from .ssh_gateway import session_manager
 
 def empty_link_side() -> dict:
     return {
@@ -95,6 +97,14 @@ def build_server_host_metrics(community: str) -> dict:
         community,
         include_optional_metric_errors=False,
     )
+
+def ssh_device_registry() -> dict:
+    return {
+        "router": {"name": "Router", "host": settings.ROUTER_IP, "port": 22},
+        "switch": {"name": "Switch", "host": settings.SWITCH_IP, "port": 22},
+        "laptop": {"name": "Laptop", "host": settings.LAPTOP_IP, "port": 22},
+        "server": {"name": "Server", "host": settings.SERVER_IP, "port": 22},
+    }
 
 @api_view(["GET"])
 def topology_view(request):
@@ -268,4 +278,42 @@ def router_ports_view(request):
     return Response({
         "router": router,
         "physical_ports": physical_ports,
+    })
+
+@api_view(["POST"])
+def ssh_session_create_view(request):
+    device_id = (request.data.get("device") or "").strip().lower()
+    username = (request.data.get("username") or "").strip()
+    password = request.data.get("password") or ""
+
+    if not device_id or not username or not password:
+        return Response(
+            {"detail": "device, username, and password are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    device = ssh_device_registry().get(device_id)
+    if not device:
+        return Response(
+            {"detail": "Unknown device."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    token = session_manager.create_pending_session(
+        device=device_id,
+        host=device["host"],
+        port=device["port"],
+        username=username,
+        password=password,
+    )
+
+    return Response({
+        "device": {
+            "id": device_id,
+            "name": device["name"],
+            "host": device["host"],
+            "port": device["port"],
+        },
+        "token": token,
+        "ws_path": "/ws/ssh/",
     })
