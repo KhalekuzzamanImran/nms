@@ -1027,7 +1027,6 @@ function DeviceNode({
                     />
                 </div>
             </button>
-            <h4>{title}</h4>
         </article>
     );
 }
@@ -1136,7 +1135,6 @@ function RouterDeviceNode({ title, ports = [], className = "", onClick }) {
                     dangerouslySetInnerHTML={{ __html: svgMarkup }}
                 />
             </button>
-            <h4>{title}</h4>
         </article>
     );
 }
@@ -1178,16 +1176,6 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
 
     return (
         <section className="traffic-flow-card">
-            <div className="traffic-flow-header">
-                <div className="traffic-flow-heading">
-                    <div className="traffic-flow-logo">NF</div>
-                    <div>
-                        <h3>Topology Map</h3>
-                        <p>Router, switch, and laptop connection path</p>
-                    </div>
-                </div>
-            </div>
-
             <div className="topology-diagram">
                 <StatusInfoBox
                     className="topology-router-status"
