@@ -9,8 +9,7 @@ import switchImage from "./assets/switch.svg";
 const API_BASE_URL =
     import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
-const HOST_METRICS_API_URL = `${API_BASE_URL}/api/host-metrics/`;
-const ROUTER_PORTS_API_URL = `${API_BASE_URL}/api/router-ports/`;
+const HISTORY_OVERVIEW_API_URL = `${API_BASE_URL}/api/history/overview/`;
 const SSH_SESSION_API_URL = `${API_BASE_URL}/api/ssh/session/`;
 
 function DeviceCard({ title, data }) {
@@ -114,6 +113,10 @@ function RouterPortsCard({ data }) {
 function buildWebSocketUrl(path, token) {
     const base = API_BASE_URL.replace(/^http/, "ws").replace(/\/$/, "");
     return `${base}${path}?token=${encodeURIComponent(token)}`;
+}
+
+function buildStatusSocketUrl() {
+    return `${API_BASE_URL.replace(/^http/, "ws").replace(/\/$/, "")}/ws/status/`;
 }
 
 function SshTerminalModal({ device, onClose }) {
@@ -730,6 +733,130 @@ function ServerRealtimeMetricsPanel({ data }) {
     );
 }
 
+function formatChartTime(value) {
+    try {
+        return new Date(value).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    } catch {
+        return "";
+    }
+}
+
+function HistoryLineChart({ title, seriesByDevice, formatter }) {
+    const colors = {
+        router: "#38bdf8",
+        switch: "#34d399",
+        laptop: "#f59e0b",
+        server: "#f472b6",
+    };
+    const entries = Object.entries(seriesByDevice || {}).filter(([, points]) =>
+        Array.isArray(points) && points.length
+    );
+
+    const allValues = entries.flatMap(([, points]) =>
+        points.map((point) => Number(point.value)).filter((value) => !Number.isNaN(value))
+    );
+    const minValue = allValues.length ? Math.min(...allValues) : 0;
+    const maxValue = allValues.length ? Math.max(...allValues) : 1;
+    const valueSpan = maxValue - minValue || 1;
+
+    function buildPath(points) {
+        return points
+            .map((point, index) => {
+                const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
+                const y = 100 - ((Number(point.value) - minValue) / valueSpan) * 100;
+                return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+            })
+            .join(" ");
+    }
+
+    const latestTime = entries[0]?.[1]?.at(-1)?.time;
+
+    return (
+        <div className="card chart-card">
+            <div className="card-title-row">
+                <h3>{title}</h3>
+                <span className="chart-subtitle">
+                    {latestTime ? `Updated ${formatChartTime(latestTime)}` : "Waiting for data"}
+                </span>
+            </div>
+            {entries.length ? (
+                <>
+                    <svg viewBox="0 0 100 100" className="history-chart">
+                        {entries.map(([device, points]) => (
+                            <path
+                                key={device}
+                                d={buildPath(points)}
+                                fill="none"
+                                stroke={colors[device] || "#93a4bf"}
+                                strokeWidth="2.4"
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        ))}
+                    </svg>
+                    <div className="chart-legend">
+                        {entries.map(([device, points]) => (
+                            <div key={device} className="chart-legend-item">
+                                <span
+                                    className="chart-legend-dot"
+                                    style={{ backgroundColor: colors[device] || "#93a4bf" }}
+                                />
+                                <strong>{device}</strong>
+                                <span>{formatter(points.at(-1)?.value)}</span>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            ) : (
+                <div className="empty-state">No historical data in InfluxDB yet.</div>
+            )}
+        </div>
+    );
+}
+
+function HistoricalCharts({ history }) {
+    const series = history?.series || {};
+    const cpuSeries = {};
+    const memorySeries = {};
+    const latencySeries = {};
+
+    Object.entries(series).forEach(([device, metrics]) => {
+        cpuSeries[device] = metrics.cpu_usage || [];
+        memorySeries[device] = metrics.memory_usage || [];
+        latencySeries[device] = metrics.latency_ms || [];
+    });
+
+    return (
+        <section className="metrics-section">
+            <div className="section-heading">
+                <div>
+                    <h2>Historical Trends</h2>
+                    <p>InfluxDB-backed metrics history updated alongside the poller.</p>
+                </div>
+            </div>
+            <div className="metrics-grid">
+                <HistoryLineChart
+                    title="CPU Usage"
+                    seriesByDevice={cpuSeries}
+                    formatter={(value) => formatPercent(value)}
+                />
+                <HistoryLineChart
+                    title="Memory Usage"
+                    seriesByDevice={memorySeries}
+                    formatter={(value) => formatPercent(value)}
+                />
+                <HistoryLineChart
+                    title="Latency"
+                    seriesByDevice={latencySeries}
+                    formatter={(value) => formatLatency(value)}
+                />
+            </div>
+        </section>
+    );
+}
+
 function NetworkDeviceMetricsPanel({
     data,
     title,
@@ -1336,46 +1463,82 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
 
 export default function App() {
     const [topologyData, setTopologyData] = useState(null);
-    const [hostMetricsData, setHostMetricsData] = useState(null);
-    const [routerPortsData, setRouterPortsData] = useState(null);
+    const [historyData, setHistoryData] = useState({ series: {} });
     const [loading, setLoading] = useState(true);
     const [sshDevice, setSshDevice] = useState(null);
 
-    async function load() {
+    async function loadSnapshot() {
         try {
-            const [topologyRes, hostMetricsRes, routerPortsRes] =
-                await Promise.all([
-                    fetch(TOPOLOGY_API_URL),
-                    fetch(HOST_METRICS_API_URL),
-                    fetch(ROUTER_PORTS_API_URL),
-                ]);
-            const [topologyJson, hostMetricsJson, routerPortsJson] =
-                await Promise.all([
-                    topologyRes.json(),
-                    hostMetricsRes.json(),
-                    routerPortsRes.json(),
-                ]);
+            const topologyRes = await fetch(TOPOLOGY_API_URL);
+            const topologyJson = await topologyRes.json();
             setTopologyData(topologyJson);
-            setHostMetricsData(hostMetricsJson);
-            setRouterPortsData(routerPortsJson);
         } catch (e) {
             setTopologyData(null);
-            setHostMetricsData(null);
-            setRouterPortsData(null);
         } finally {
             setLoading(false);
         }
     }
 
+    async function loadHistory() {
+        try {
+            const response = await fetch(HISTORY_OVERVIEW_API_URL);
+            const payload = await response.json();
+            setHistoryData(payload);
+        } catch {
+            setHistoryData({ series: {} });
+        }
+    }
+
     useEffect(() => {
-        load();
-        const timer = setInterval(load, 5000);
-        return () => clearInterval(timer);
+        loadSnapshot();
+        loadHistory();
+        const snapshotTimer = setInterval(loadSnapshot, 15000);
+        const historyTimer = setInterval(loadHistory, 15000);
+        return () => {
+            clearInterval(snapshotTimer);
+            clearInterval(historyTimer);
+        };
+    }, []);
+
+    useEffect(() => {
+        const socket = new WebSocket(buildStatusSocketUrl());
+        socket.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                setTopologyData((current) => {
+                    if (!current) return current;
+                    const nextNodes = { ...current.nodes };
+                    Object.entries(payload.nodes || {}).forEach(([name, statusData]) => {
+                        nextNodes[name] = {
+                            ...nextNodes[name],
+                            status: statusData.status,
+                            error: statusData.error,
+                        };
+                    });
+                    const nextLinks = { ...current.links };
+                    Object.entries(payload.links || {}).forEach(([name, statusData]) => {
+                        nextLinks[name] = {
+                            ...nextLinks[name],
+                            status: statusData.status,
+                        };
+                    });
+                    return {
+                        ...current,
+                        nodes: nextNodes,
+                        links: nextLinks,
+                        summary: payload.summary || current.summary,
+                    };
+                });
+            } catch {
+                return;
+            }
+        };
+        return () => socket.close();
     }, []);
 
     const nodes = topologyData?.nodes || {};
     const links = topologyData?.links || {};
-    const laptopNode = hostMetricsData?.node || nodes.laptop;
+    const laptopNode = nodes.laptop;
     const serverNode = nodes.server;
     const sshTargets = {
         router: { id: "router", title: "Router", ip: nodes.router?.ip },
@@ -1444,15 +1607,15 @@ export default function App() {
                 itemLabel="Port"
             />
 
-            <RouterPortsCard data={routerPortsData} />
-
             <HostMetricsPanel
                 data={laptopNode}
                 title="Laptop Metrics"
-                description="Detailed laptop telemetry from `/api/host-metrics/`"
+                description="Latest polled laptop telemetry from the snapshot cache"
             />
 
             <ServerRealtimeMetricsPanel data={serverNode} />
+
+            <HistoricalCharts history={historyData} />
 
             {sshDevice ? (
                 <SshTerminalModal

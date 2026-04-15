@@ -1,0 +1,73 @@
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: nms-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: nms
+      DOCKER_INFLUXDB_INIT_BUCKET: network_metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: network-monitor-token
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+
+  backend:
+    build:
+      context: .
+    container_name: nms-backend
+    depends_on:
+      - influxdb
+    ports:
+      - "8000:8000"
+    environment:
+      SNMP_COMMUNITY: public
+      ROUTER_IP: 103.4.116.146
+      SWITCH_IP: 10.10.10.100
+      LAPTOP_IP: 10.10.10.253
+      SERVER_IP: 10.10.10.252
+      POLL_INTERVAL_SECONDS: 5
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: network-monitor-token
+      INFLUXDB_ORG: nms
+      INFLUXDB_BUCKET: network_metrics
+    volumes:
+      - runtime_data:/app/runtime
+
+  poller:
+    build:
+      context: .
+    container_name: nms-poller
+    depends_on:
+      - influxdb
+    command: ["python", "manage.py", "poll_network"]
+    environment:
+      SNMP_COMMUNITY: public
+      ROUTER_IP: 103.4.116.146
+      SWITCH_IP: 10.10.10.100
+      LAPTOP_IP: 10.10.10.253
+      SERVER_IP: 10.10.10.252
+      POLL_INTERVAL_SECONDS: 5
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: network-monitor-token
+      INFLUXDB_ORG: nms
+      INFLUXDB_BUCKET: network_metrics
+    volumes:
+      - runtime_data:/app/runtime
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: nms-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  influxdb_data:
+  runtime_data:

@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "dev-secret-key"
@@ -62,11 +63,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-SNMP_COMMUNITY = "public"
-ROUTER_IP = "103.4.116.146"
-SWITCH_IP = "10.10.10.100"
-LAPTOP_IP = "10.10.10.253"
-SERVER_IP = "10.10.10.252"
+SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
+ROUTER_IP = os.getenv("ROUTER_IP", "103.4.116.146")
+SWITCH_IP = os.getenv("SWITCH_IP", "10.10.10.100")
+LAPTOP_IP = os.getenv("LAPTOP_IP", "10.10.10.253")
+SERVER_IP = os.getenv("SERVER_IP", "10.10.10.252")
 
 ROUTER_TO_SWITCH_ROUTER_PORT_INDEX = 2
 ROUTER_TO_SWITCH_SWITCH_PORT_INDEX = 1
@@ -77,3 +78,8 @@ AUTO_DISCOVER_SERVER_ROUTER_PORT = True
 LAPTOP_WIFI_EXTEND_TOKEN = "wifi_info"
 LAPTOP_GPU_EXTEND_TOKEN = "gpu_info"
 SERVER_METRICS_EXTEND_TOKEN = "server_metrics"
+POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "5"))
+INFLUXDB_URL = os.getenv("INFLUXDB_URL", "")
+INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "")
+INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "")
+INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "")
