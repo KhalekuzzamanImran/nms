@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from django.conf import settings
 
-SNAPSHOT_SCHEMA_VERSION = 3
+SNAPSHOT_SCHEMA_VERSION = 4
 
 
 def snapshot_path():

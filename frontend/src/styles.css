@@ -791,6 +791,25 @@ p {
     color: #2563eb;
 }
 
+.rate-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+}
+
+.rate-in {
+    color: #0f9fda;
+}
+
+.rate-separator {
+    color: #98a2b3;
+}
+
+.rate-out {
+    color: #7c3aed;
+}
+
 .topology-link {
     display: grid;
     justify-items: center;

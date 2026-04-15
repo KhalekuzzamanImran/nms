@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 from django.conf import settings
 
+from .current_state import SNAPSHOT_SCHEMA_VERSION, read_snapshot_payload
 from .snmp import (
     discover_router_port_for_host,
     discover_switch_port_for_laptop,
@@ -26,6 +29,9 @@ def empty_link_side() -> dict:
         "last_change": None,
         "in_octets": None,
         "out_octets": None,
+        "in_rate_mbps": None,
+        "out_rate_mbps": None,
+        "total_rate_mbps": None,
         "in_errors": None,
         "out_errors": None,
     }
@@ -80,12 +86,133 @@ def empty_physical_ports() -> dict:
         "totals": {
             "in_octets": 0,
             "out_octets": 0,
+            "in_rate_mbps": None,
+            "out_rate_mbps": None,
+            "total_rate_mbps": None,
             "in_errors": 0,
             "out_errors": 0,
             "in_discards": 0,
             "out_discards": 0,
         },
     }
+
+
+def _parse_snapshot_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _compute_rate_mbps(
+    current_octets: int | float | None,
+    previous_octets: int | float | None,
+    elapsed_seconds: float | None,
+) -> float | None:
+    if elapsed_seconds is None or elapsed_seconds <= 0:
+        return None
+    if current_octets is None or previous_octets is None:
+        return None
+    try:
+        delta = float(current_octets) - float(previous_octets)
+    except (TypeError, ValueError):
+        return None
+    if delta < 0:
+        return None
+    return round((delta * 8) / elapsed_seconds / 1_000_000, 3)
+
+
+def _annotate_side_rates(
+    current_side: dict | None,
+    previous_side: dict | None,
+    elapsed_seconds: float | None,
+) -> dict:
+    side = dict(current_side or empty_link_side())
+    side["in_rate_mbps"] = _compute_rate_mbps(
+        side.get("in_octets"),
+        (previous_side or {}).get("in_octets"),
+        elapsed_seconds,
+    )
+    side["out_rate_mbps"] = _compute_rate_mbps(
+        side.get("out_octets"),
+        (previous_side or {}).get("out_octets"),
+        elapsed_seconds,
+    )
+    if side["in_rate_mbps"] is None and side["out_rate_mbps"] is None:
+        side["total_rate_mbps"] = None
+    else:
+        side["total_rate_mbps"] = round(
+            (side["in_rate_mbps"] or 0) + (side["out_rate_mbps"] or 0),
+            3,
+        )
+    return side
+
+
+def _annotate_physical_port_rates(
+    current_ports: dict,
+    previous_ports: dict | None,
+    elapsed_seconds: float | None,
+) -> dict:
+    previous_by_index = {
+        port.get("port_index"): port
+        for port in (previous_ports or {}).get("ports", [])
+        if port.get("port_index") is not None
+    }
+    annotated_ports = []
+
+    for port in current_ports.get("ports", []):
+        previous_port = previous_by_index.get(port.get("port_index"))
+        annotated_port = dict(port)
+        annotated_port["in_rate_mbps"] = _compute_rate_mbps(
+            annotated_port.get("in_octets"),
+            (previous_port or {}).get("in_octets"),
+            elapsed_seconds,
+        )
+        annotated_port["out_rate_mbps"] = _compute_rate_mbps(
+            annotated_port.get("out_octets"),
+            (previous_port or {}).get("out_octets"),
+            elapsed_seconds,
+        )
+        if (
+            annotated_port["in_rate_mbps"] is None
+            and annotated_port["out_rate_mbps"] is None
+        ):
+            annotated_port["total_rate_mbps"] = None
+        else:
+            annotated_port["total_rate_mbps"] = round(
+                (annotated_port["in_rate_mbps"] or 0)
+                + (annotated_port["out_rate_mbps"] or 0),
+                3,
+            )
+        annotated_ports.append(annotated_port)
+
+    totals = dict(current_ports.get("totals", {}))
+    in_total = [
+        port["in_rate_mbps"]
+        for port in annotated_ports
+        if port.get("in_rate_mbps") is not None
+    ]
+    out_total = [
+        port["out_rate_mbps"]
+        for port in annotated_ports
+        if port.get("out_rate_mbps") is not None
+    ]
+    totals["in_rate_mbps"] = round(sum(in_total), 3) if in_total else None
+    totals["out_rate_mbps"] = round(sum(out_total), 3) if out_total else None
+    if totals["in_rate_mbps"] is None and totals["out_rate_mbps"] is None:
+        totals["total_rate_mbps"] = None
+    else:
+        totals["total_rate_mbps"] = round(
+            (totals["in_rate_mbps"] or 0) + (totals["out_rate_mbps"] or 0),
+            3,
+        )
+
+    annotated = dict(current_ports)
+    annotated["ports"] = annotated_ports
+    annotated["totals"] = totals
+    return annotated
 
 
 def build_host_node(
@@ -160,6 +287,19 @@ def build_server_host_metrics(community: str) -> dict:
 
 def build_topology_snapshot() -> dict:
     community = settings.SNMP_COMMUNITY
+    previous_payload = read_snapshot_payload() or {}
+    previous_snapshot = (
+        previous_payload.get("snapshot")
+        if previous_payload.get("schema_version") == SNAPSHOT_SCHEMA_VERSION
+        else None
+    )
+    previous_captured_at = _parse_snapshot_time(previous_payload.get("captured_at"))
+    now = datetime.now(timezone.utc)
+    elapsed_seconds = (
+        (now - previous_captured_at).total_seconds()
+        if previous_captured_at is not None
+        else None
+    )
 
     router = build_network_device_node(
         settings.ROUTER_IP,
@@ -173,6 +313,17 @@ def build_topology_snapshot() -> dict:
     )
     laptop = build_laptop_host_metrics(community)
     server = build_server_host_metrics(community)
+
+    router["physical_ports"] = _annotate_physical_port_rates(
+        router.get("physical_ports", empty_physical_ports()),
+        (previous_snapshot or {}).get("nodes", {}).get("router", {}).get("physical_ports"),
+        elapsed_seconds,
+    )
+    switch["physical_ports"] = _annotate_physical_port_rates(
+        switch.get("physical_ports", empty_physical_ports()),
+        (previous_snapshot or {}).get("nodes", {}).get("switch", {}).get("physical_ports"),
+        elapsed_seconds,
+    )
 
     router_to_switch_router_side = (
         poll_link_side(
@@ -239,6 +390,28 @@ def build_topology_snapshot() -> dict:
         poll_link_side(settings.ROUTER_IP, community, router_to_server_port_index)
         if router["status"] == "up" and router_to_server_port_index is not None
         else empty_link_side()
+    )
+
+    previous_links = (previous_snapshot or {}).get("links", {})
+    router_to_switch_router_side = _annotate_side_rates(
+        router_to_switch_router_side,
+        previous_links.get("router_to_switch", {}).get("router_side"),
+        elapsed_seconds,
+    )
+    router_to_switch_switch_side = _annotate_side_rates(
+        router_to_switch_switch_side,
+        previous_links.get("router_to_switch", {}).get("switch_side"),
+        elapsed_seconds,
+    )
+    switch_to_laptop_switch_side = _annotate_side_rates(
+        switch_to_laptop_switch_side,
+        previous_links.get("switch_to_laptop", {}).get("switch_side"),
+        elapsed_seconds,
+    )
+    router_to_server_router_side = _annotate_side_rates(
+        router_to_server_router_side,
+        previous_links.get("router_to_server", {}).get("router_side"),
+        elapsed_seconds,
     )
 
     router_switch_up = (

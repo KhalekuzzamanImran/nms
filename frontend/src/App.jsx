@@ -89,6 +89,35 @@ function formatLatency(value) {
     return `${Number(value).toFixed(2)} ms`;
 }
 
+function formatBandwidth(mbps) {
+    if (mbps == null || Number.isNaN(Number(mbps))) return "-";
+    const value = Number(mbps);
+    if (value >= 1000) {
+        return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} Gbps`;
+    }
+    if (value >= 1) {
+        return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} Mbps`;
+    }
+    return `${(value * 1000).toFixed(value * 1000 >= 100 ? 0 : 1)} Kbps`;
+}
+
+function getDisplayedLinkSide(link) {
+    const primary = link?.switch_side || link?.router_side || null;
+    return primary || null;
+}
+
+function formatDisplayedLinkRate(link) {
+    const side = getDisplayedLinkSide(link);
+    if (!side) return "-";
+    if (side.total_rate_mbps != null) {
+        return formatBandwidth(side.total_rate_mbps);
+    }
+    if (side.speed_mbps != null && side.speed_mbps > 0) {
+        return formatBandwidth(side.speed_mbps);
+    }
+    return "-";
+}
+
 function InfoTile({ label, value }) {
     return (
         <div className="info-tile">
@@ -1157,7 +1186,7 @@ function NetworkDeviceMetricsPanel({
 
                 <div className="card">
                     <div className="card-title-row">
-                        <h3>{itemLabel} Status</h3>
+                        <h3>{itemLabel} Status & Throughput</h3>
                     </div>
                     <div className="metrics-list">
                         <InfoTile
@@ -1171,6 +1200,18 @@ function NetworkDeviceMetricsPanel({
                         <InfoTile
                             label={`${itemLabel}s Down`}
                             value={physicalPorts.down_physical_ports ?? "-"}
+                        />
+                        <InfoTile
+                            label="Ingress"
+                            value={formatBandwidth(totals.in_rate_mbps)}
+                        />
+                        <InfoTile
+                            label="Egress"
+                            value={formatBandwidth(totals.out_rate_mbps)}
+                        />
+                        <InfoTile
+                            label="Combined"
+                            value={formatBandwidth(totals.total_rate_mbps)}
                         />
                         <InfoTile label="Uptime" value={data?.uptime || "-"} />
                     </div>
@@ -1307,7 +1348,14 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
                 <strong>Oper:</strong> {left.oper_status_label || "-"}
             </div>
             <div>
-                <strong>Speed:</strong> {left.speed_mbps ?? "-"} Mbps
+                <strong>Total throughput:</strong>{" "}
+                {formatBandwidth(left.total_rate_mbps)}
+            </div>
+            <div>
+                <strong>Port speed:</strong>{" "}
+                {left.speed_mbps != null && left.speed_mbps > 0
+                    ? formatBandwidth(left.speed_mbps)
+                    : "N/A"}
             </div>
             <div>
                 <strong>Traffic:</strong> In {left.in_octets ?? "-"} / Out{" "}
@@ -1337,8 +1385,14 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
                         {right.oper_status_label || "-"}
                     </div>
                     <div>
-                        <strong>Peer speed:</strong> {right.speed_mbps ?? "-"}{" "}
-                        Mbps
+                        <strong>Peer total throughput:</strong>{" "}
+                        {formatBandwidth(right.total_rate_mbps)}
+                    </div>
+                    <div>
+                        <strong>Peer port speed:</strong>{" "}
+                        {right.speed_mbps != null && right.speed_mbps > 0
+                            ? formatBandwidth(right.speed_mbps)
+                            : "N/A"}
                     </div>
                     <div>
                         <strong>Peer traffic:</strong> In{" "}
@@ -1358,22 +1412,8 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
     );
 }
 
-function formatBandwidth(mbps) {
-    if (mbps == null || Number.isNaN(Number(mbps))) return "-";
-    const value = Number(mbps);
-    if (value >= 1000)
-        return `${(value / 1000).toFixed(value % 1000 === 0 ? 1 : 2)} Gbps`;
-    return `${value} Mbps`;
-}
-
 function getPrimarySide(link) {
     return link?.switch_side || link?.router_side || null;
-}
-
-function getLinkSpeed(link) {
-    return (
-        link?.switch_side?.speed_mbps ?? link?.router_side?.speed_mbps ?? null
-    );
 }
 
 function DeviceNode({
@@ -1561,8 +1601,8 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                         },
                         {
                             label: "Uplink",
-                            value: formatBandwidth(
-                                getLinkSpeed(links?.router_to_switch),
+                            value: formatDisplayedLinkRate(
+                                links?.router_to_switch,
                             ),
                         },
                     ]}
@@ -1582,9 +1622,7 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                     <div className="flow-connector-meta topology-link-label">
                         <span>Router to Switch</span>
                         <strong>
-                            {formatBandwidth(
-                                getLinkSpeed(links?.router_to_switch),
-                            )}
+                            {formatDisplayedLinkRate(links?.router_to_switch)}
                         </strong>
                     </div>
                 </div>
@@ -1625,9 +1663,7 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                     <div className="flow-connector-meta flow-connector-meta-vertical">
                         <span>Switch to PC</span>
                         <strong>
-                            {formatBandwidth(
-                                getLinkSpeed(links?.switch_to_laptop),
-                            )}
+                            {formatDisplayedLinkRate(links?.switch_to_laptop)}
                         </strong>
                     </div>
                 </div>
@@ -1653,8 +1689,8 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                         { label: "Address", value: nodes?.laptop?.ip || "-" },
                         {
                             label: "Link",
-                            value: formatBandwidth(
-                                getLinkSpeed(links?.switch_to_laptop),
+                            value: formatDisplayedLinkRate(
+                                links?.switch_to_laptop,
                             ),
                         },
                     ]}
@@ -1667,9 +1703,7 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                     <div className="flow-connector-meta flow-connector-meta-vertical">
                         <span>Router to Server</span>
                         <strong>
-                            {formatBandwidth(
-                                getLinkSpeed(links?.router_to_server),
-                            )}
+                            {formatDisplayedLinkRate(links?.router_to_server)}
                         </strong>
                     </div>
                 </div>
@@ -1695,8 +1729,8 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                         { label: "Address", value: nodes?.server?.ip || "-" },
                         {
                             label: "Link",
-                            value: formatBandwidth(
-                                getLinkSpeed(links?.router_to_server),
+                            value: formatDisplayedLinkRate(
+                                links?.router_to_server,
                             ),
                         },
                     ]}
