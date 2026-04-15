@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .current_state import read_snapshot
-from .influx import query_overview_history
+from .influx import query_chart_history
 from .snapshot import build_topology_snapshot
 from .ssh_gateway import session_manager
 from django.conf import settings
@@ -45,14 +45,14 @@ def router_ports_view(request):
 
 
 @api_view(["GET"])
-def history_overview_view(request):
+def history_charts_view(request):
     range_minutes = request.query_params.get("range_minutes", "30")
     window = request.query_params.get("window", "1m")
     try:
         parsed_range = max(5, min(24 * 60, int(range_minutes)))
     except ValueError:
         parsed_range = 30
-    return Response(query_overview_history(range_minutes=parsed_range, window=window))
+    return Response(query_chart_history(range_minutes=parsed_range, window=window))
 
 
 @api_view(["POST"])

@@ -9,7 +9,7 @@ import switchImage from "./assets/switch.svg";
 const API_BASE_URL =
     import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
-const HISTORY_OVERVIEW_API_URL = `${API_BASE_URL}/api/history/overview/`;
+const HISTORY_CHARTS_API_URL = `${API_BASE_URL}/api/history/charts/`;
 const SSH_SESSION_API_URL = `${API_BASE_URL}/api/ssh/session/`;
 
 function DeviceCard({ title, data }) {
@@ -744,7 +744,7 @@ function formatChartTime(value) {
     }
 }
 
-function HistoryLineChart({ title, seriesByDevice, formatter }) {
+function HistoryLineChart({ title, seriesByDevice, formatter, yDomain = null }) {
     const colors = {
         router: "#38bdf8",
         switch: "#34d399",
@@ -758,18 +758,49 @@ function HistoryLineChart({ title, seriesByDevice, formatter }) {
     const allValues = entries.flatMap(([, points]) =>
         points.map((point) => Number(point.value)).filter((value) => !Number.isNaN(value))
     );
-    const minValue = allValues.length ? Math.min(...allValues) : 0;
-    const maxValue = allValues.length ? Math.max(...allValues) : 1;
+    const minValue = yDomain ? yDomain[0] : allValues.length ? Math.min(...allValues) : 0;
+    const maxValue = yDomain ? yDomain[1] : allValues.length ? Math.max(...allValues) : 1;
     const valueSpan = maxValue - minValue || 1;
+    const xAxisPoints = entries[0]?.[1] || [];
+    const yAxisLabels = Array.from({ length: 5 }, (_, index) => {
+        const ratio = 1 - index / 4;
+        return minValue + valueSpan * ratio;
+    });
+    const xAxisLabels = [
+        xAxisPoints[0],
+        xAxisPoints[Math.max(0, Math.floor((xAxisPoints.length - 1) / 2))],
+        xAxisPoints[xAxisPoints.length - 1],
+    ].filter(Boolean);
 
     function buildPath(points) {
         return points
             .map((point, index) => {
                 const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
-                const y = 100 - ((Number(point.value) - minValue) / valueSpan) * 100;
+                const normalized = Math.max(
+                    0,
+                    Math.min(1, (Number(point.value) - minValue) / valueSpan),
+                );
+                const y = 100 - normalized * 100;
                 return `${index === 0 ? "M" : "L"} ${x} ${y}`;
             })
             .join(" ");
+    }
+
+    function buildPointPosition(points, index) {
+        const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
+        const normalized = Math.max(
+            0,
+            Math.min(1, (Number(points[index].value) - minValue) / valueSpan),
+        );
+        const y = 100 - normalized * 100;
+        return { x, y };
+    }
+
+    function buildAreaPath(points) {
+        if (!points.length) return "";
+        const linePath = buildPath(points);
+        const lastX = points.length === 1 ? 0 : 100;
+        return `${linePath} L ${lastX} 100 L 0 100 Z`;
     }
 
     const latestTime = entries[0]?.[1]?.at(-1)?.time;
@@ -784,18 +815,106 @@ function HistoryLineChart({ title, seriesByDevice, formatter }) {
             </div>
             {entries.length ? (
                 <>
-                    <svg viewBox="0 0 100 100" className="history-chart">
-                        {entries.map(([device, points]) => (
-                            <path
-                                key={device}
-                                d={buildPath(points)}
-                                fill="none"
-                                stroke={colors[device] || "#93a4bf"}
-                                strokeWidth="2.4"
-                                vectorEffect="non-scaling-stroke"
-                            />
-                        ))}
-                    </svg>
+                    <div className="history-chart-shell">
+                        <div className="history-y-axis">
+                            {yAxisLabels.map((label, index) => (
+                                <span key={`${title}-y-${index}`}>
+                                    {formatter(label)}
+                                </span>
+                            ))}
+                        </div>
+                        <div className="history-chart-main">
+                            <svg viewBox="0 0 100 100" className="history-chart">
+                                <defs>
+                                    {entries.map(([device]) => (
+                                        <linearGradient
+                                            key={`${device}-gradient`}
+                                            id={`${title}-${device}-gradient`}
+                                            x1="0"
+                                            x2="0"
+                                            y1="0"
+                                            y2="1"
+                                        >
+                                            <stop
+                                                offset="0%"
+                                                stopColor={colors[device] || "#93a4bf"}
+                                                stopOpacity="0.32"
+                                            />
+                                            <stop
+                                                offset="100%"
+                                                stopColor={colors[device] || "#93a4bf"}
+                                                stopOpacity="0.02"
+                                            />
+                                        </linearGradient>
+                                    ))}
+                                </defs>
+                                {Array.from({ length: 5 }, (_, index) => {
+                                    const y = index * 25;
+                                    return (
+                                        <line
+                                            key={`${title}-grid-y-${index}`}
+                                            x1="0"
+                                            y1={y}
+                                            x2="100"
+                                            y2={y}
+                                            className="history-grid-line"
+                                        />
+                                    );
+                                })}
+                                {Array.from({ length: 6 }, (_, index) => {
+                                    const x = index * 20;
+                                    return (
+                                        <line
+                                            key={`${title}-grid-x-${index}`}
+                                            x1={x}
+                                            y1="0"
+                                            x2={x}
+                                            y2="100"
+                                            className="history-grid-line history-grid-line-vertical"
+                                        />
+                                    );
+                                })}
+                                {entries.map(([device, points]) => (
+                                    <path
+                                        key={`${device}-area`}
+                                        d={buildAreaPath(points)}
+                                        fill={`url(#${title}-${device}-gradient)`}
+                                    />
+                                ))}
+                                {entries.map(([device, points]) => (
+                                    <path
+                                        key={device}
+                                        d={buildPath(points)}
+                                        fill="none"
+                                        stroke={colors[device] || "#93a4bf"}
+                                        strokeWidth="2.4"
+                                        vectorEffect="non-scaling-stroke"
+                                    />
+                                ))}
+                                {entries.flatMap(([device, points]) =>
+                                    points.map((point, index) => {
+                                        const position = buildPointPosition(points, index);
+                                        return (
+                                            <circle
+                                                key={`${device}-point-${index}`}
+                                                cx={position.x}
+                                                cy={position.y}
+                                                r="1.8"
+                                                fill={colors[device] || "#93a4bf"}
+                                            />
+                                        );
+                                    }),
+                                )}
+                            </svg>
+                            <div className="history-x-axis">
+                                {xAxisLabels.map((point, index) => (
+                                    <span key={`${title}-x-${index}`}>
+                                        {formatChartTime(point.time)}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
                     <div className="chart-legend">
                         {entries.map(([device, points]) => (
                             <div key={device} className="chart-legend-item">
@@ -828,6 +947,31 @@ function HistoricalCharts({ history }) {
         latencySeries[device] = metrics.latency_ms || [];
     });
 
+    const serverMetrics = series.server || {};
+    const serverCpuSeries = { server: cpuSeries.server || [] };
+    const serverMemorySeries = { server: memorySeries.server || [] };
+    const serverLatencySeries = {
+        server: serverMetrics.latency_ms || latencySeries.server || [],
+    };
+    const serverPacketLossSeries = {
+        server: serverMetrics.packet_loss || [],
+    };
+    const serverProcessSeries = {
+        server: serverMetrics.process_count || [],
+    };
+    const serverDiskUsageSeries = {
+        server: serverMetrics.disk_usage || [],
+    };
+    const serverRxBytesSeries = {
+        server: serverMetrics.rx_bytes || [],
+    };
+    const serverTxBytesSeries = {
+        server: serverMetrics.tx_bytes || [],
+    };
+    const serverMemoryUsedSeries = {
+        server: serverMetrics.memory_used_mb || [],
+    };
+
     return (
         <section className="metrics-section">
             <div className="section-heading">
@@ -836,21 +980,76 @@ function HistoricalCharts({ history }) {
                     <p>InfluxDB-backed metrics history updated alongside the poller.</p>
                 </div>
             </div>
-            <div className="metrics-grid">
+            <div className="history-charts-stack">
                 <HistoryLineChart
-                    title="CPU Usage"
+                    title="CPU Usage By Device"
                     seriesByDevice={cpuSeries}
                     formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
                 />
                 <HistoryLineChart
-                    title="Memory Usage"
+                    title="Memory Usage By Device"
                     seriesByDevice={memorySeries}
                     formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
                 />
                 <HistoryLineChart
-                    title="Latency"
+                    title="Latency By Device"
                     seriesByDevice={latencySeries}
                     formatter={(value) => formatLatency(value)}
+                />
+                <HistoryLineChart
+                    title="Server CPU Usage"
+                    seriesByDevice={serverCpuSeries}
+                    formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
+                />
+                <HistoryLineChart
+                    title="Server Memory Usage"
+                    seriesByDevice={serverMemorySeries}
+                    formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
+                />
+                <HistoryLineChart
+                    title="Server Memory Used"
+                    seriesByDevice={serverMemoryUsedSeries}
+                    formatter={(value) => formatMegabytes(value)}
+                />
+                <HistoryLineChart
+                    title="Server Latency"
+                    seriesByDevice={serverLatencySeries}
+                    formatter={(value) => formatLatency(value)}
+                />
+                <HistoryLineChart
+                    title="Server Packet Loss"
+                    seriesByDevice={serverPacketLossSeries}
+                    formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
+                />
+                <HistoryLineChart
+                    title="Server Process Count"
+                    seriesByDevice={serverProcessSeries}
+                    formatter={(value) =>
+                        value == null || Number.isNaN(Number(value))
+                            ? "-"
+                            : Math.round(Number(value)).toString()
+                    }
+                />
+                <HistoryLineChart
+                    title="Server Disk Usage"
+                    seriesByDevice={serverDiskUsageSeries}
+                    formatter={(value) => formatPercent(value)}
+                    yDomain={[0, 100]}
+                />
+                <HistoryLineChart
+                    title="Server RX Bytes"
+                    seriesByDevice={serverRxBytesSeries}
+                    formatter={(value) => formatBytes(value)}
+                />
+                <HistoryLineChart
+                    title="Server TX Bytes"
+                    seriesByDevice={serverTxBytesSeries}
+                    formatter={(value) => formatBytes(value)}
                 />
             </div>
         </section>
@@ -1481,7 +1680,7 @@ export default function App() {
 
     async function loadHistory() {
         try {
-            const response = await fetch(HISTORY_OVERVIEW_API_URL);
+            const response = await fetch(HISTORY_CHARTS_API_URL);
             const payload = await response.json();
             setHistoryData(payload);
         } catch {

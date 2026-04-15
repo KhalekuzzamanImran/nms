@@ -46,6 +46,15 @@ def _field_value(value):
     return json.dumps(str(value))
 
 
+def _int_percent(value):
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def write_snapshot_metrics(snapshot: dict) -> None:
     if not influx_enabled():
         return
@@ -54,14 +63,31 @@ def write_snapshot_metrics(snapshot: dict) -> None:
     lines = []
     for device, node in snapshot.get("nodes", {}).items():
         metrics = node.get("host_metrics", {})
+        disks = metrics.get("disk") or []
+        disk_total_bytes = sum((disk or {}).get("total_bytes") or 0 for disk in disks)
+        disk_used_bytes = sum((disk or {}).get("used_bytes") or 0 for disk in disks)
+        disk_usage = (
+            round((disk_used_bytes / disk_total_bytes) * 100, 2)
+            if disk_total_bytes
+            else None
+        )
         fields = {
             "online": 1 if node.get("status") == "up" else 0,
-            "cpu_usage": metrics.get("cpu", {}).get("usage_percent"),
+            "cpu_usage": _int_percent(metrics.get("cpu", {}).get("usage_percent")),
+            "load_1m": metrics.get("cpu", {}).get("load_average", {}).get("1m"),
+            "load_5m": metrics.get("cpu", {}).get("load_average", {}).get("5m"),
+            "load_15m": metrics.get("cpu", {}).get("load_average", {}).get("15m"),
             "memory_usage": metrics.get("memory", {}).get("usage_percent"),
+            "memory_total_mb": metrics.get("memory", {}).get("total_mb"),
+            "memory_available_mb": metrics.get("memory", {}).get("available_mb"),
             "memory_used_mb": metrics.get("memory", {}).get("used_mb"),
+            "swap_usage": metrics.get("memory", {}).get("swap_usage_percent"),
             "latency_ms": node.get("ping", {}).get("avg_latency_ms"),
             "packet_loss": node.get("ping", {}).get("packet_loss_percent"),
             "process_count": metrics.get("processes", {}).get("count"),
+            "disk_usage": disk_usage,
+            "disk_total_bytes": disk_total_bytes or None,
+            "disk_used_bytes": disk_used_bytes or None,
         }
         network = metrics.get("network") or {}
         fields.update(
@@ -102,15 +128,35 @@ def write_snapshot_metrics(snapshot: dict) -> None:
         return
 
 
-def query_overview_history(range_minutes: int = 30, window: str = "1m") -> dict:
+def query_chart_history(range_minutes: int = 30, window: str = "1m") -> dict:
     if not influx_enabled():
         return {"series": {}}
 
+    fields = [
+        "cpu_usage",
+        "load_1m",
+        "load_5m",
+        "load_15m",
+        "memory_usage",
+        "memory_used_mb",
+        "memory_total_mb",
+        "latency_ms",
+        "packet_loss",
+        "process_count",
+        "disk_usage",
+        "disk_used_bytes",
+        "disk_total_bytes",
+        "rx_bytes",
+        "tx_bytes",
+        "rx_packets",
+        "tx_packets",
+    ]
+    field_filter = " or ".join(f'r._field == "{field}"' for field in fields)
     flux = f"""
 from(bucket: "{settings.INFLUXDB_BUCKET}")
   |> range(start: -{int(range_minutes)}m)
   |> filter(fn: (r) => r._measurement == "device_metrics")
-  |> filter(fn: (r) => r._field == "cpu_usage" or r._field == "memory_usage" or r._field == "latency_ms" or r._field == "packet_loss")
+  |> filter(fn: (r) => {field_filter})
   |> aggregateWindow(every: {window}, fn: mean, createEmpty: false)
   |> keep(columns: ["_time", "_field", "_value", "device"])
 """
@@ -128,17 +174,16 @@ from(bucket: "{settings.INFLUXDB_BUCKET}")
     )
     reader = csv.DictReader(io.StringIO(filtered_lines))
     for row in reader:
-        if not row.get("_time") or not row.get("_field") or row.get("_value") in (None, ""):
-            continue
         device = row.get("device")
         field = row.get("_field")
-        if not device or not field:
+        value = row.get("_value")
+        if not row.get("_time") or not device or not field or value in (None, ""):
             continue
         try:
-            value = float(row["_value"])
+            parsed_value = float(value)
         except ValueError:
             continue
         series.setdefault(device, {}).setdefault(field, []).append(
-            {"time": row["_time"], "value": value}
+            {"time": row["_time"], "value": parsed_value}
         )
     return {"series": series}

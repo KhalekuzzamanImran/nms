@@ -12,7 +12,7 @@ HOST_RESOURCES_STORAGE_TYPES = {
     "1.3.6.1.2.1.25.2.1.5": "removable_disk",
     "1.3.6.1.2.1.25.2.1.7": "flash_memory",
 }
-NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.3.1.1"
+NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.3.1.2"
 PHYSICAL_INTERFACE_TYPES = {
     6,    # ethernetCsmacd
     62,   # fastEther
@@ -221,11 +221,22 @@ def parse_key_value_text(raw: Optional[str]) -> dict:
 def parse_json_text(raw: Optional[str]) -> Optional[dict]:
     if not raw:
         return None
+    candidates = [raw]
+    if '\\"' in raw:
+        candidates.append(raw.replace('\\"', '"'))
     try:
-        parsed = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        candidates.append(bytes(raw, "utf-8").decode("unicode_escape"))
+    except UnicodeDecodeError:
+        pass
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 def parse_maybe_number(value: Optional[str]):
     if value is None:

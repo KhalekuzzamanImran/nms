@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 
 from django.conf import settings
 
+SNAPSHOT_SCHEMA_VERSION = 3
+
 
 def snapshot_path():
     return settings.BASE_DIR / "runtime" / "latest_snapshot.json"
@@ -15,6 +17,7 @@ def ensure_runtime_dir():
 def write_snapshot(snapshot: dict) -> None:
     ensure_runtime_dir()
     payload = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "snapshot": snapshot,
     }
@@ -34,6 +37,8 @@ def read_snapshot_payload() -> dict | None:
 def read_snapshot() -> dict | None:
     payload = read_snapshot_payload()
     if not payload:
+        return None
+    if payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
         return None
     return payload.get("snapshot")
 
