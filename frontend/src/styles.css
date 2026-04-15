@@ -28,7 +28,7 @@ select {
 }
 
 .page {
-    max-width: 1380px;
+    max-width: 100%;
     margin: 0 auto;
     padding: 20px 24px 40px;
 }
@@ -83,6 +83,29 @@ p {
 .section-heading p {
     margin-top: 6px;
     color: #93a4bf;
+}
+
+.chart-filter-bar {
+    display: flex;
+    align-items: end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.chart-filter-control {
+    display: grid;
+    gap: 6px;
+    color: #93a4bf;
+    font-size: 0.85rem;
+}
+
+.chart-filter-control select {
+    min-width: 148px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.75);
+    color: #e2e8f0;
 }
 
 .metrics-grid {
@@ -167,6 +190,7 @@ p {
 
 .chart-card {
     min-height: 340px;
+    width: 100%;
 }
 
 .chart-subtitle {

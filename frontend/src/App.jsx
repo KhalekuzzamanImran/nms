@@ -11,6 +11,18 @@ const API_BASE_URL =
 const TOPOLOGY_API_URL = `${API_BASE_URL}/api/topology/`;
 const HISTORY_CHARTS_API_URL = `${API_BASE_URL}/api/history/charts/`;
 const SSH_SESSION_API_URL = `${API_BASE_URL}/api/ssh/session/`;
+const CHART_RANGE_OPTIONS = [
+    { value: "15", label: "Last 15 min" },
+    { value: "30", label: "Last 30 min" },
+    { value: "60", label: "Last 1 hour" },
+    { value: "180", label: "Last 3 hours" },
+    { value: "360", label: "Last 6 hours" },
+];
+const CHART_WINDOW_OPTIONS = [
+    { value: "30s", label: "30 sec" },
+    { value: "1m", label: "1 min" },
+    { value: "5m", label: "5 min" },
+];
 
 function DeviceCard({ title, data }) {
     const online = data?.status === "up";
@@ -758,8 +770,18 @@ function HistoryLineChart({ title, seriesByDevice, formatter, yDomain = null }) 
     const allValues = entries.flatMap(([, points]) =>
         points.map((point) => Number(point.value)).filter((value) => !Number.isNaN(value))
     );
-    const minValue = yDomain ? yDomain[0] : allValues.length ? Math.min(...allValues) : 0;
-    const maxValue = yDomain ? yDomain[1] : allValues.length ? Math.max(...allValues) : 1;
+    const rawMinValue = allValues.length ? Math.min(...allValues) : 0;
+    const rawMaxValue = allValues.length ? Math.max(...allValues) : 1;
+    const autoSpan = rawMaxValue - rawMinValue;
+    const autoPadding = autoSpan
+        ? autoSpan * 0.08
+        : Math.max(Math.abs(rawMaxValue || rawMinValue || 1) * 0.02, 1);
+    const minValue = yDomain
+        ? yDomain[0]
+        : rawMinValue - autoPadding;
+    const maxValue = yDomain
+        ? yDomain[1]
+        : rawMaxValue + autoPadding;
     const valueSpan = maxValue - minValue || 1;
     const xAxisPoints = entries[0]?.[1] || [];
     const yAxisLabels = Array.from({ length: 5 }, (_, index) => {
@@ -824,7 +846,11 @@ function HistoryLineChart({ title, seriesByDevice, formatter, yDomain = null }) 
                             ))}
                         </div>
                         <div className="history-chart-main">
-                            <svg viewBox="0 0 100 100" className="history-chart">
+                            <svg
+                                viewBox="0 0 100 100"
+                                preserveAspectRatio="none"
+                                className="history-chart"
+                            >
                                 <defs>
                                     {entries.map(([device]) => (
                                         <linearGradient
@@ -891,20 +917,6 @@ function HistoryLineChart({ title, seriesByDevice, formatter, yDomain = null }) 
                                         vectorEffect="non-scaling-stroke"
                                     />
                                 ))}
-                                {entries.flatMap(([device, points]) =>
-                                    points.map((point, index) => {
-                                        const position = buildPointPosition(points, index);
-                                        return (
-                                            <circle
-                                                key={`${device}-point-${index}`}
-                                                cx={position.x}
-                                                cy={position.y}
-                                                r="1.8"
-                                                fill={colors[device] || "#93a4bf"}
-                                            />
-                                        );
-                                    }),
-                                )}
                             </svg>
                             <div className="history-x-axis">
                                 {xAxisLabels.map((point, index) => (
@@ -935,7 +947,13 @@ function HistoryLineChart({ title, seriesByDevice, formatter, yDomain = null }) 
     );
 }
 
-function HistoricalCharts({ history }) {
+function HistoricalCharts({
+    history,
+    rangeMinutes,
+    windowSize,
+    onRangeChange,
+    onWindowChange,
+}) {
     const series = history?.series || {};
     const cpuSeries = {};
     const memorySeries = {};
@@ -978,6 +996,34 @@ function HistoricalCharts({ history }) {
                 <div>
                     <h2>Historical Trends</h2>
                     <p>InfluxDB-backed metrics history updated alongside the poller.</p>
+                </div>
+                <div className="chart-filter-bar">
+                    <label className="chart-filter-control">
+                        <span>Range</span>
+                        <select
+                            value={rangeMinutes}
+                            onChange={(event) => onRangeChange(event.target.value)}
+                        >
+                            {CHART_RANGE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label className="chart-filter-control">
+                        <span>Point Window</span>
+                        <select
+                            value={windowSize}
+                            onChange={(event) => onWindowChange(event.target.value)}
+                        >
+                            {CHART_WINDOW_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                 </div>
             </div>
             <div className="history-charts-stack">
@@ -1665,6 +1711,8 @@ export default function App() {
     const [historyData, setHistoryData] = useState({ series: {} });
     const [loading, setLoading] = useState(true);
     const [sshDevice, setSshDevice] = useState(null);
+    const [chartRangeMinutes, setChartRangeMinutes] = useState("30");
+    const [chartWindow, setChartWindow] = useState("1m");
 
     async function loadSnapshot() {
         try {
@@ -1680,7 +1728,13 @@ export default function App() {
 
     async function loadHistory() {
         try {
-            const response = await fetch(HISTORY_CHARTS_API_URL);
+            const params = new URLSearchParams({
+                range_minutes: chartRangeMinutes,
+                window: chartWindow,
+            });
+            const response = await fetch(
+                `${HISTORY_CHARTS_API_URL}?${params.toString()}`,
+            );
             const payload = await response.json();
             setHistoryData(payload);
         } catch {
@@ -1691,48 +1745,74 @@ export default function App() {
     useEffect(() => {
         loadSnapshot();
         loadHistory();
-        const snapshotTimer = setInterval(loadSnapshot, 15000);
-        const historyTimer = setInterval(loadHistory, 15000);
+        const historyTimer = setInterval(loadHistory, 5000);
         return () => {
-            clearInterval(snapshotTimer);
             clearInterval(historyTimer);
         };
-    }, []);
+    }, [chartRangeMinutes, chartWindow]);
 
     useEffect(() => {
-        const socket = new WebSocket(buildStatusSocketUrl());
-        socket.onmessage = (event) => {
-            try {
-                const payload = JSON.parse(event.data);
-                setTopologyData((current) => {
-                    if (!current) return current;
-                    const nextNodes = { ...current.nodes };
-                    Object.entries(payload.nodes || {}).forEach(([name, statusData]) => {
-                        nextNodes[name] = {
-                            ...nextNodes[name],
-                            status: statusData.status,
-                            error: statusData.error,
+        let socket = null;
+        let reconnectTimer = null;
+        let closedByApp = false;
+
+        function connectStatusSocket() {
+            socket = new WebSocket(buildStatusSocketUrl());
+            socket.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    setTopologyData((current) => {
+                        if (!current) return current;
+                        const nextNodes = { ...current.nodes };
+                        Object.entries(payload.nodes || {}).forEach(
+                            ([name, statusData]) => {
+                                nextNodes[name] = {
+                                    ...nextNodes[name],
+                                    status: statusData.status,
+                                    error: statusData.error,
+                                };
+                            },
+                        );
+                        const nextLinks = { ...current.links };
+                        Object.entries(payload.links || {}).forEach(
+                            ([name, statusData]) => {
+                                nextLinks[name] = {
+                                    ...nextLinks[name],
+                                    status: statusData.status,
+                                };
+                            },
+                        );
+                        return {
+                            ...current,
+                            nodes: nextNodes,
+                            links: nextLinks,
+                            summary: payload.summary || current.summary,
                         };
                     });
-                    const nextLinks = { ...current.links };
-                    Object.entries(payload.links || {}).forEach(([name, statusData]) => {
-                        nextLinks[name] = {
-                            ...nextLinks[name],
-                            status: statusData.status,
-                        };
-                    });
-                    return {
-                        ...current,
-                        nodes: nextNodes,
-                        links: nextLinks,
-                        summary: payload.summary || current.summary,
-                    };
-                });
-            } catch {
-                return;
+                } catch {
+                    return;
+                }
+            };
+
+            socket.onclose = () => {
+                if (closedByApp) return;
+                reconnectTimer = window.setTimeout(connectStatusSocket, 3000);
+            };
+
+            socket.onerror = () => {
+                socket?.close();
+            };
+        }
+
+        connectStatusSocket();
+
+        return () => {
+            closedByApp = true;
+            if (reconnectTimer) {
+                window.clearTimeout(reconnectTimer);
             }
+            socket?.close();
         };
-        return () => socket.close();
     }, []);
 
     const nodes = topologyData?.nodes || {};
@@ -1814,7 +1894,13 @@ export default function App() {
 
             <ServerRealtimeMetricsPanel data={serverNode} />
 
-            <HistoricalCharts history={historyData} />
+            <HistoricalCharts
+                history={historyData}
+                rangeMinutes={chartRangeMinutes}
+                windowSize={chartWindow}
+                onRangeChange={setChartRangeMinutes}
+                onWindowChange={setChartWindow}
+            />
 
             {sshDevice ? (
                 <SshTerminalModal
