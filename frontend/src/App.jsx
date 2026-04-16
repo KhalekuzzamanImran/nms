@@ -1778,6 +1778,13 @@ export default function App() {
 
     useEffect(() => {
         loadSnapshot();
+        const snapshotTimer = setInterval(loadSnapshot, 5000);
+        return () => {
+            clearInterval(snapshotTimer);
+        };
+    }, []);
+
+    useEffect(() => {
         loadHistory();
         const historyTimer = setInterval(loadHistory, 5000);
         return () => {
