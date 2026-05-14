@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from django.conf import settings
 
-SNAPSHOT_SCHEMA_VERSION = 4
+SNAPSHOT_SCHEMA_VERSION = 5
 
 
 def snapshot_path():
@@ -46,6 +46,7 @@ def read_snapshot() -> dict | None:
 def build_status_payload(snapshot: dict, captured_at: str | None = None) -> dict:
     nodes = snapshot.get("nodes", {})
     links = snapshot.get("links", {})
+    uplinks = snapshot.get("uplinks", {})
     return {
         "captured_at": captured_at,
         "nodes": {
@@ -58,6 +59,31 @@ def build_status_payload(snapshot: dict, captured_at: str | None = None) -> dict
         "links": {
             name: {"status": link.get("status")}
             for name, link in links.items()
+        },
+        "uplinks": {
+            "handover": uplinks.get("handover", {}),
+            "primary": {
+                "status": uplinks.get("primary", {}).get("status"),
+                "active": uplinks.get("primary", {}).get("active"),
+                "ip": uplinks.get("primary", {}).get("ip"),
+                "gateway_ip": uplinks.get("primary", {}).get("gateway_ip"),
+                "management_status": uplinks.get("primary", {}).get("management_status"),
+                "reachability_status": uplinks.get("primary", {}).get("reachability_status"),
+                "gateway_status": uplinks.get("primary", {}).get("gateway_status"),
+                "gateway_ping": uplinks.get("primary", {}).get("gateway_ping"),
+                "error": uplinks.get("primary", {}).get("error"),
+            },
+            "secondary": {
+                "status": uplinks.get("secondary", {}).get("status"),
+                "active": uplinks.get("secondary", {}).get("active"),
+                "ip": uplinks.get("secondary", {}).get("ip"),
+                "gateway_ip": uplinks.get("secondary", {}).get("gateway_ip"),
+                "management_status": uplinks.get("secondary", {}).get("management_status"),
+                "reachability_status": uplinks.get("secondary", {}).get("reachability_status"),
+                "gateway_status": uplinks.get("secondary", {}).get("gateway_status"),
+                "gateway_ping": uplinks.get("secondary", {}).get("gateway_ping"),
+                "error": uplinks.get("secondary", {}).get("error"),
+            },
         },
         "summary": snapshot.get("summary", {}),
     }

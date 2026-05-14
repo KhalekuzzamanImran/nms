@@ -9,9 +9,17 @@ from .ssh_gateway import session_manager
 from django.conf import settings
 
 
-def ssh_device_registry() -> dict:
+def get_active_router_ip(snapshot: dict | None = None) -> str:
+    handover = (snapshot or {}).get("uplinks", {}).get("handover", {})
+    return (
+        handover.get("active_ip")
+        or getattr(settings, "ROUTER_PRIMARY_LINK_IP", settings.ROUTER_IP)
+    )
+
+
+def ssh_device_registry(snapshot: dict | None = None) -> dict:
     return {
-        "router": {"name": "Router", "host": settings.ROUTER_IP, "port": 22},
+        "router": {"name": "Router", "host": get_active_router_ip(snapshot), "port": 22},
         "switch": {"name": "Switch", "host": settings.SWITCH_IP, "port": 22},
         "laptop": {"name": "Laptop", "host": settings.LAPTOP_IP, "port": 22},
         "server": {"name": "Server", "host": settings.SERVER_IP, "port": 22},
@@ -57,6 +65,7 @@ def history_charts_view(request):
 
 @api_view(["POST"])
 def ssh_session_create_view(request):
+    snapshot = get_or_build_snapshot()
     device_id = (request.data.get("device") or "").strip().lower()
     username = (request.data.get("username") or "").strip()
     password = request.data.get("password") or ""
@@ -67,7 +76,7 @@ def ssh_session_create_view(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    device = ssh_device_registry().get(device_id)
+    device = ssh_device_registry(snapshot).get(device_id)
     if not device:
         return Response(
             {"detail": "Unknown device."},

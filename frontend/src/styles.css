@@ -54,7 +54,8 @@ p {
 }
 
 .device-grid,
-.link-grid {
+.link-grid,
+.uplink-grid {
     display: grid;
     gap: 16px;
     margin-top: 20px;
@@ -66,6 +67,20 @@ p {
 
 .link-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.uplink-grid {
+    grid-template-columns: 1.2fr repeat(2, minmax(0, 1fr));
+}
+
+.uplink-card,
+.handover-card {
+    min-height: 190px;
+}
+
+.uplink-active {
+    border-color: rgba(52, 211, 153, 0.5);
+    box-shadow: 0 18px 46px rgba(20, 184, 122, 0.16);
 }
 
 .metrics-section {
@@ -709,6 +724,7 @@ p {
 @media (max-width: 1100px) {
     .device-grid,
     .link-grid,
+    .uplink-grid,
     .metrics-grid,
     .router-ports-summary {
         grid-template-columns: 1fr;

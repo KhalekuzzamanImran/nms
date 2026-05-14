@@ -13,6 +13,23 @@ HOST_RESOURCES_STORAGE_TYPES = {
     "1.3.6.1.2.1.25.2.1.7": "flash_memory",
 }
 NS_EXTEND_OUTPUT1_BASE = "1.3.6.1.4.1.8072.1.3.2.3.1.2"
+IF_NAME_BASE = "1.3.6.1.2.1.31.1.1.1.1"
+IF_DESCR_BASE = "1.3.6.1.2.1.2.2.1.2"
+IF_TYPE_BASE = "1.3.6.1.2.1.2.2.1.3"
+IF_ADMIN_STATUS_BASE = "1.3.6.1.2.1.2.2.1.7"
+IF_OPER_STATUS_BASE = "1.3.6.1.2.1.2.2.1.8"
+IF_SPEED_BASE = "1.3.6.1.2.1.31.1.1.1.15"
+IF_IN_OCTETS_BASE = "1.3.6.1.2.1.31.1.1.1.6"
+IF_OUT_OCTETS_BASE = "1.3.6.1.2.1.31.1.1.1.10"
+IF_PHYS_ADDRESS_BASE = "1.3.6.1.2.1.2.2.1.6"
+IF_ALIAS_BASE = "1.3.6.1.2.1.31.1.1.1.18"
+LLDP_LOC_PORT_ID_BASE = "1.0.8802.1.1.2.1.3.7.1.3"
+LLDP_LOC_PORT_DESC_BASE = "1.0.8802.1.1.2.1.3.7.1.4"
+LLDP_REM_SYS_NAME_BASE = "1.0.8802.1.1.2.1.4.1.1.9"
+CDP_CACHE_DEVICE_ID_BASE = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"
+DOT1D_BASE_PORT_IFINDEX_BASE = "1.3.6.1.2.1.17.1.4.1.2"
+DOT1D_TP_FDB_ADDRESS_BASE = "1.3.6.1.2.1.17.4.3.1.1"
+DOT1D_TP_FDB_PORT_BASE = "1.3.6.1.2.1.17.4.3.1.2"
 PHYSICAL_INTERFACE_TYPES = {
     6,    # ethernetCsmacd
     62,   # fastEther
@@ -138,6 +155,15 @@ def poll_device(ip: str, community: str) -> dict:
         "error": None if name.ok else name.error,
     }
 
+def poll_management_endpoint(ip: str, community: str) -> dict:
+    name = run_snmpget(ip, community, "1.3.6.1.2.1.1.5.0")
+    return {
+        "ip": ip,
+        "status": "up" if name.ok else "down",
+        "name": extract_string(name.value) if name.ok else None,
+        "error": None if name.ok else name.error,
+    }
+
 def poll_link_side(ip: str, community: str, port_index: int) -> dict:
     port_name = run_snmpget(ip, community, f"1.3.6.1.2.1.31.1.1.1.1.{port_index}")
     admin = run_snmpget(ip, community, f"1.3.6.1.2.1.2.2.1.7.{port_index}")
@@ -181,6 +207,398 @@ def parse_walk_map(lines: List[str]) -> Dict[str, str]:
 
 def normalize_mac(mac: str) -> str:
     return mac.replace("-", ":").replace(" ", ":").lower()
+
+def normalize_identity(value: Optional[str]) -> str:
+    text = extract_string(value) or value or ""
+    text = text.strip().strip('"').lower()
+    if not re.fullmatch(r"\d+(?:\.\d+){3}", text):
+        text = text.split(".", 1)[0]
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+def identity_matches(value: Optional[str], peer_names: List[str]) -> bool:
+    candidate = normalize_identity(value)
+    if not candidate:
+        return False
+
+    for peer_name in peer_names:
+        peer = normalize_identity(peer_name)
+        if not peer:
+            continue
+        if candidate == peer:
+            return True
+        if len(candidate) >= 3 and candidate in peer:
+            return True
+        if len(peer) >= 3 and peer in candidate:
+            return True
+    return False
+
+def _extract_lldp_local_port_num(suffix: str) -> Optional[int]:
+    parts = suffix.split(".")
+    if len(parts) < 2:
+        return None
+    return extract_integer(parts[1])
+
+def _extract_cdp_ifindex(suffix: str) -> Optional[int]:
+    parts = suffix.split(".")
+    if not parts:
+        return None
+    return extract_integer(parts[0])
+
+def _interface_text_maps(ip: str, community: str) -> Dict[str, Dict[str, str]]:
+    return {
+        "names": walk_suffix_map(ip, community, IF_NAME_BASE),
+        "descriptions": walk_suffix_map(ip, community, IF_DESCR_BASE),
+        "aliases": walk_suffix_map(ip, community, IF_ALIAS_BASE),
+    }
+
+def _interface_index_by_text(
+    interface_maps: Dict[str, Dict[str, str]],
+    candidates: List[Optional[str]],
+) -> Optional[int]:
+    normalized_to_index = {}
+    for values in interface_maps.values():
+        for index_text, raw_value in values.items():
+            index = extract_integer(index_text)
+            name = extract_string(raw_value)
+            normalized = normalize_identity(name)
+            if index is not None and normalized:
+                normalized_to_index[normalized] = index
+
+    for candidate in candidates:
+        normalized = normalize_identity(candidate)
+        if not normalized:
+            continue
+        if normalized in normalized_to_index:
+            return normalized_to_index[normalized]
+    return None
+
+def resolve_lldp_local_port_to_ifindex(
+    ip: str,
+    community: str,
+    local_port_num: int,
+) -> Optional[int]:
+    local_port_key = str(local_port_num)
+    local_port_ids = walk_suffix_map(ip, community, LLDP_LOC_PORT_ID_BASE)
+    local_port_descs = walk_suffix_map(ip, community, LLDP_LOC_PORT_DESC_BASE)
+    interface_maps = _interface_text_maps(ip, community)
+
+    local_port_id = extract_string(local_port_ids.get(local_port_key))
+    local_port_desc = extract_string(local_port_descs.get(local_port_key))
+    mapped_index = _interface_index_by_text(
+        interface_maps,
+        [local_port_id, local_port_desc],
+    )
+    if mapped_index is not None:
+        return mapped_index
+
+    numeric_port_id = extract_integer(local_port_id)
+    if numeric_port_id is not None:
+        numeric_port_key = str(numeric_port_id)
+        for values in interface_maps.values():
+            if numeric_port_key in values:
+                return numeric_port_id
+
+    for values in interface_maps.values():
+        if local_port_key in values:
+            return local_port_num
+    return None
+
+def discover_lldp_neighbor_port(
+    local_ip: str,
+    peer_names: List[str],
+    community: str,
+) -> Optional[dict]:
+    remote_names = walk_suffix_map(local_ip, community, LLDP_REM_SYS_NAME_BASE)
+    for suffix, raw_name in remote_names.items():
+        remote_name = extract_string(raw_name)
+        if not identity_matches(remote_name, peer_names):
+            continue
+
+        local_port_num = _extract_lldp_local_port_num(suffix)
+        if local_port_num is None:
+            continue
+
+        if_index = resolve_lldp_local_port_to_ifindex(
+            local_ip,
+            community,
+            local_port_num,
+        )
+        if if_index is None:
+            continue
+
+        return {
+            "port_index": if_index,
+            "method": "lldp",
+            "remote_name": remote_name,
+            "local_port_num": local_port_num,
+        }
+    return None
+
+def discover_cdp_neighbor_port(
+    local_ip: str,
+    peer_names: List[str],
+    community: str,
+) -> Optional[dict]:
+    device_ids = walk_suffix_map(local_ip, community, CDP_CACHE_DEVICE_ID_BASE)
+    for suffix, raw_device_id in device_ids.items():
+        device_id = extract_string(raw_device_id)
+        if not identity_matches(device_id, peer_names):
+            continue
+
+        if_index = _extract_cdp_ifindex(suffix)
+        if if_index is None:
+            continue
+
+        return {
+            "port_index": if_index,
+            "method": "cdp",
+            "remote_name": device_id,
+        }
+    return None
+
+def discover_neighbor_port(
+    local_ip: str,
+    peer_names: List[str],
+    community: str,
+) -> Optional[dict]:
+    return (
+        discover_lldp_neighbor_port(local_ip, peer_names, community)
+        or discover_cdp_neighbor_port(local_ip, peer_names, community)
+    )
+
+def get_interface_macs(ip: str, community: str) -> List[str]:
+    macs = []
+    for value in walk_suffix_map(ip, community, IF_PHYS_ADDRESS_BASE).values():
+        mac = value_to_mac(value)
+        if not mac:
+            continue
+        normalized = normalize_mac(mac)
+        if normalized == "00:00:00:00:00:00":
+            continue
+        if normalized not in macs:
+            macs.append(normalized)
+    return macs
+
+def discover_fdb_port_for_macs(
+    local_ip: str,
+    peer_macs: List[str],
+    community: str,
+    excluded_port_indexes: Optional[List[int]] = None,
+) -> Optional[dict]:
+    peer_mac_set = {normalize_mac(mac) for mac in peer_macs if mac}
+    excluded = set(excluded_port_indexes or [])
+    if not peer_mac_set:
+        return None
+
+    base_port_to_ifindex = walk_suffix_map(
+        local_ip,
+        community,
+        DOT1D_BASE_PORT_IFINDEX_BASE,
+    )
+    fdb_addr = walk_suffix_map(local_ip, community, DOT1D_TP_FDB_ADDRESS_BASE)
+    fdb_port = walk_suffix_map(local_ip, community, DOT1D_TP_FDB_PORT_BASE)
+
+    suffix_to_mac = {}
+    for suffix, value in fdb_addr.items():
+        mac = value_to_mac(value)
+        if mac:
+            suffix_to_mac[suffix] = normalize_mac(mac)
+
+    for suffix, value in fdb_port.items():
+        mac = suffix_to_mac.get(suffix)
+        if mac not in peer_mac_set:
+            continue
+        bridge_port = extract_integer(value)
+        if bridge_port is None:
+            continue
+        if_index = extract_integer(base_port_to_ifindex.get(str(bridge_port)))
+        if if_index is None or if_index in excluded:
+            continue
+        return {
+            "port_index": if_index,
+            "method": "mac_forwarding_table",
+            "matched_mac": mac,
+            "bridge_port": bridge_port,
+        }
+    return None
+
+def discover_active_physical_port(
+    ip: str,
+    community: str,
+    excluded_port_indexes: Optional[List[int]] = None,
+) -> Optional[dict]:
+    excluded = set(excluded_port_indexes or [])
+    names = walk_suffix_map(ip, community, IF_NAME_BASE)
+    descriptions = walk_suffix_map(ip, community, IF_DESCR_BASE)
+    types = walk_suffix_map(ip, community, IF_TYPE_BASE)
+    admin = walk_suffix_map(ip, community, IF_ADMIN_STATUS_BASE)
+    oper = walk_suffix_map(ip, community, IF_OPER_STATUS_BASE)
+    speed = walk_suffix_map(ip, community, IF_SPEED_BASE)
+    in_octets = walk_suffix_map(ip, community, IF_IN_OCTETS_BASE)
+    out_octets = walk_suffix_map(ip, community, IF_OUT_OCTETS_BASE)
+
+    best_port = None
+    best_score = None
+    for index_text, type_value in types.items():
+        index = extract_integer(index_text)
+        if index is None or index in excluded:
+            continue
+
+        port_name = (
+            extract_string(names.get(index_text))
+            or extract_string(descriptions.get(index_text))
+        )
+        if_type = extract_integer(type_value)
+        if not is_probably_physical_interface(port_name, if_type):
+            continue
+
+        admin_status = extract_integer(admin.get(index_text))
+        oper_status = extract_integer(oper.get(index_text))
+        speed_mbps = extract_integer(speed.get(index_text)) or 0
+        if admin_status != 1 or oper_status != 1 or speed_mbps <= 0:
+            continue
+
+        traffic_score = (
+            (extract_integer(in_octets.get(index_text)) or 0)
+            + (extract_integer(out_octets.get(index_text)) or 0)
+        )
+        score = (traffic_score, speed_mbps, -index)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_port = {
+                "port_index": index,
+                "method": "traffic_port_status_heuristic",
+                "port_name": port_name,
+                "traffic_score": traffic_score,
+            }
+    return best_port
+
+def _set_discovered_port(
+    discovery: dict,
+    side: str,
+    candidate: Optional[dict],
+) -> None:
+    if not candidate or discovery.get(f"{side}_port_index") is not None:
+        return
+    discovery[f"{side}_port_index"] = candidate.get("port_index")
+    discovery[f"{side}_port_method"] = candidate.get("method")
+    discovery[f"{side}_port_detail"] = {
+        key: value
+        for key, value in candidate.items()
+        if key not in {"port_index", "method"}
+    }
+
+def _combined_discovery_method(discovery: dict) -> str:
+    methods = [
+        discovery.get("router_port_method"),
+        discovery.get("switch_port_method"),
+    ]
+    methods = [method for method in methods if method]
+    if not methods:
+        return "none"
+    unique_methods = sorted(set(methods))
+    if len(unique_methods) == 1:
+        return unique_methods[0]
+    return "mixed"
+
+def discover_router_switch_ports(
+    router_ip: str,
+    switch_ip: str,
+    community: str,
+    router_name: Optional[str] = None,
+    switch_name: Optional[str] = None,
+    configured_router_port_index: Optional[int] = None,
+    configured_switch_port_index: Optional[int] = None,
+) -> dict:
+    discovery = {
+        "router_port_index": None,
+        "switch_port_index": None,
+        "router_port_method": None,
+        "switch_port_method": None,
+        "router_port_detail": {},
+        "switch_port_detail": {},
+        "discovery_method": "none",
+    }
+    router_peer_names = [switch_name or "", switch_ip]
+    switch_peer_names = [router_name or "", router_ip]
+
+    _set_discovered_port(
+        discovery,
+        "router",
+        discover_lldp_neighbor_port(router_ip, router_peer_names, community),
+    )
+    _set_discovered_port(
+        discovery,
+        "switch",
+        discover_lldp_neighbor_port(switch_ip, switch_peer_names, community),
+    )
+
+    _set_discovered_port(
+        discovery,
+        "router",
+        discover_cdp_neighbor_port(router_ip, router_peer_names, community),
+    )
+    _set_discovered_port(
+        discovery,
+        "switch",
+        discover_cdp_neighbor_port(switch_ip, switch_peer_names, community),
+    )
+
+    router_macs = get_interface_macs(router_ip, community)
+    switch_macs = get_interface_macs(switch_ip, community)
+    _set_discovered_port(
+        discovery,
+        "router",
+        discover_fdb_port_for_macs(router_ip, switch_macs, community),
+    )
+    _set_discovered_port(
+        discovery,
+        "switch",
+        discover_fdb_port_for_macs(switch_ip, router_macs, community),
+    )
+
+    _set_discovered_port(
+        discovery,
+        "router",
+        discover_active_physical_port(router_ip, community),
+    )
+    _set_discovered_port(
+        discovery,
+        "switch",
+        discover_active_physical_port(switch_ip, community),
+    )
+
+    if (
+        discovery["router_port_index"] is None
+        and configured_router_port_index is not None
+    ):
+        _set_discovered_port(
+            discovery,
+            "router",
+            {
+                "port_index": configured_router_port_index,
+                "method": "configured_index",
+            },
+        )
+    if (
+        discovery["switch_port_index"] is None
+        and configured_switch_port_index is not None
+    ):
+        _set_discovered_port(
+            discovery,
+            "switch",
+            {
+                "port_index": configured_switch_port_index,
+                "method": "configured_index",
+            },
+        )
+
+    discovery["discovery_method"] = _combined_discovery_method(discovery)
+    discovery["discovery_detail"] = (
+        f"router:{discovery.get('router_port_method') or 'none'} "
+        f"switch:{discovery.get('switch_port_method') or 'none'}"
+    )
+    return discovery
 
 def walk_suffix_map(ip: str, community: str, oid: str) -> Dict[str, str]:
     prefix = f".{oid}."
@@ -257,6 +675,10 @@ def value_to_mac(value: str) -> Optional[str]:
             return ":".join(p.zfill(2) for p in parts)
     if "STRING:" in value:
         tail = value.split("STRING:", 1)[1].strip().strip('"')
+        if ":" in tail:
+            parts = [part.strip().lower() for part in tail.split(":") if part.strip()]
+            if len(parts) == 6 and all(re.fullmatch(r"[0-9a-f]{1,2}", part) for part in parts):
+                return ":".join(part.zfill(2) for part in parts)
         hex_like = re.findall(r"[0-9A-Fa-f]{2}", tail)
         if len(hex_like) == 6:
             return ":".join(p.lower() for p in hex_like)

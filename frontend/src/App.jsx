@@ -118,6 +118,20 @@ function formatDisplayedLinkRate(link) {
     return "-";
 }
 
+function formatUplinkRole(role) {
+    if (!role) return "No active link";
+    return role === "primary" ? "Primary" : "Secondary";
+}
+
+function formatUplinkState(state) {
+    const states = {
+        primary_active: "Primary active",
+        secondary_handover: "Secondary handover",
+        all_links_down: "All links down",
+    };
+    return states[state] || "-";
+}
+
 function InfoTile({ label, value }) {
     return (
         <div className="info-tile">
@@ -1321,6 +1335,10 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
     const left = link?.router_side || link?.switch_side || {};
     const right =
         link?.switch_side && link?.router_side ? link.switch_side : null;
+    const hasDiscovery =
+        "discovered_port_index" in (link || {}) ||
+        "discovered_router_port_index" in (link || {}) ||
+        "discovered_switch_port_index" in (link || {});
 
     return (
         <div className="card">
@@ -1331,9 +1349,26 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
                 </span>
             </div>
 
-            {"discovered_port_index" in (link || {}) ? (
+            {hasDiscovery ? (
                 <div>
                     <strong>Discovery:</strong> {link.discovery_method || "-"}
+                    {link.discovery_detail ? ` (${link.discovery_detail})` : ""}
+                </div>
+            ) : null}
+
+            {"discovered_router_port_index" in (link || {}) ? (
+                <div>
+                    <strong>Detected router port:</strong>{" "}
+                    {link.discovered_router_port_index ?? "-"} via{" "}
+                    {link.router_port_method || "-"}
+                </div>
+            ) : null}
+
+            {"discovered_switch_port_index" in (link || {}) ? (
+                <div>
+                    <strong>Detected switch port:</strong>{" "}
+                    {link.discovered_switch_port_index ?? "-"} via{" "}
+                    {link.switch_port_method || "-"}
                 </div>
             ) : null}
 
@@ -1408,6 +1443,97 @@ function LinkCard({ title, link, rightLabel = "Peer port" }) {
                     </div>
                 </>
             ) : null}
+        </div>
+    );
+}
+
+function UplinkCard({ title, link }) {
+    const up = link?.status === "up";
+    const active = Boolean(link?.active);
+    const ping = link?.ping || {};
+    const gatewayPing = link?.gateway_ping || {};
+
+    return (
+        <div className={`card uplink-card ${active ? "uplink-active" : ""}`}>
+            <div className="card-title-row">
+                <h3>{title}</h3>
+                <span className={`pill ${up ? "pill-green" : "pill-red"}`}>
+                    {active ? "active" : link?.status || "-"}
+                </span>
+            </div>
+            <div>
+                <strong>Router WAN:</strong> {link?.ip || "-"}
+            </div>
+            <div>
+                <strong>ISP gateway:</strong> {link?.gateway_ip || "-"}
+            </div>
+            <div>
+                <strong>SNMP:</strong> {link?.management_status || "-"}
+            </div>
+            <div>
+                <strong>Gateway:</strong> {link?.gateway_status || "-"}
+            </div>
+            <div>
+                <strong>Reachability:</strong>{" "}
+                {link?.reachability_status || "-"}
+            </div>
+            <div>
+                <strong>Latency:</strong> {formatLatency(ping.avg_latency_ms)}
+            </div>
+            <div>
+                <strong>Gateway latency:</strong>{" "}
+                {formatLatency(gatewayPing.avg_latency_ms)}
+            </div>
+            <div>
+                <strong>Packet loss:</strong>{" "}
+                {formatPercent(ping.packet_loss_percent)}
+            </div>
+            <div>
+                <strong>Gateway loss:</strong>{" "}
+                {formatPercent(gatewayPing.packet_loss_percent)}
+            </div>
+            {link?.error ? (
+                <div>
+                    <strong>Error:</strong> {link.error}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+function HandoverPanel({ uplinks }) {
+    const handover = uplinks?.handover || {};
+
+    return (
+        <div className="uplink-grid">
+            <div className="card handover-card">
+                <div className="card-title-row">
+                    <h3>WAN Handover</h3>
+                    <span
+                        className={`pill ${
+                            handover.active ? "pill-green" : "pill-red"
+                        }`}
+                    >
+                        {formatUplinkRole(handover.active)}
+                    </span>
+                </div>
+                <div>
+                    <strong>State:</strong>{" "}
+                    {formatUplinkState(handover.state)}
+                </div>
+                <div>
+                    <strong>Active IP:</strong> {handover.active_ip || "-"}
+                </div>
+                <div>
+                    <strong>Active gateway:</strong>{" "}
+                    {handover.active_gateway_ip || "-"}
+                </div>
+                <div>
+                    <strong>Reason:</strong> {handover.reason || "-"}
+                </div>
+            </div>
+            <UplinkCard title="Primary Link" link={uplinks?.primary} />
+            <UplinkCard title="Secondary Link" link={uplinks?.secondary} />
         </div>
     );
 }
@@ -1575,13 +1701,14 @@ function StatusInfoBox({ title, status, metrics = [], className = "" }) {
     );
 }
 
-function TopologyMap({ nodes, links, onDeviceClick }) {
+function TopologyMap({ nodes, links, uplinks, onDeviceClick }) {
     const rsUp = links?.router_to_switch?.status === "up";
     const slUp = links?.switch_to_laptop?.status === "up";
     const srvUp = links?.router_to_server?.status === "up";
     const routerSwitchSide = getPrimarySide(links?.router_to_switch);
     const switchLaptopSide = getPrimarySide(links?.switch_to_laptop);
     const routerServerSide = getPrimarySide(links?.router_to_server);
+    const handover = uplinks?.handover || nodes?.router?.management || {};
     const routerPorts = Array.isArray(nodes?.router?.physical_ports?.ports)
         ? nodes.router.physical_ports.ports
         : [];
@@ -1601,9 +1728,12 @@ function TopologyMap({ nodes, links, onDeviceClick }) {
                         },
                         {
                             label: "Uplink",
-                            value: formatDisplayedLinkRate(
-                                links?.router_to_switch,
-                            ),
+                            value: formatUplinkRole(handover.active),
+                        },
+                        {
+                            label: "Mgmt IP",
+                            value:
+                                handover.active_ip || nodes?.router?.ip || "-",
                         },
                     ]}
                 />
@@ -1827,6 +1957,24 @@ export default function App() {
                             ...current,
                             nodes: nextNodes,
                             links: nextLinks,
+                            uplinks: payload.uplinks
+                                ? {
+                                      ...current.uplinks,
+                                      ...payload.uplinks,
+                                      primary: {
+                                          ...current.uplinks?.primary,
+                                          ...payload.uplinks.primary,
+                                      },
+                                      secondary: {
+                                          ...current.uplinks?.secondary,
+                                          ...payload.uplinks.secondary,
+                                      },
+                                      handover: {
+                                          ...current.uplinks?.handover,
+                                          ...payload.uplinks.handover,
+                                      },
+                                  }
+                                : current.uplinks,
                             summary: payload.summary || current.summary,
                         };
                     });
@@ -1858,6 +2006,7 @@ export default function App() {
 
     const nodes = topologyData?.nodes || {};
     const links = topologyData?.links || {};
+    const uplinks = topologyData?.uplinks || {};
     const laptopNode = nodes.laptop;
     const serverNode = nodes.server;
     const sshTargets = {
@@ -1878,8 +2027,8 @@ export default function App() {
         <div className="page">
             <h2>SNMP Topology Dashboard</h2>
             <p className="sub">
-                Router, switch, and Ubuntu laptop with dynamic switch-port
-                discovery
+                Router, dual WAN handover, switch, server, and Ubuntu laptop
+                monitoring
             </p>
 
             {loading && <div>Loading...</div>}
@@ -1887,6 +2036,7 @@ export default function App() {
             <TopologyMap
                 nodes={nodes}
                 links={links}
+                uplinks={uplinks}
                 onDeviceClick={openSshDevice}
             />
 
@@ -1896,6 +2046,8 @@ export default function App() {
                 <DeviceCard title="Ubuntu Laptop" data={laptopNode} />
                 <DeviceCard title="Server" data={serverNode} />
             </div>
+
+            <HandoverPanel uplinks={uplinks} />
 
             <div className="link-grid">
                 <LinkCard
