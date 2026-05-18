@@ -10,11 +10,7 @@ from django.conf import settings
 
 
 def get_active_router_ip(snapshot: dict | None = None) -> str:
-    handover = (snapshot or {}).get("uplinks", {}).get("handover", {})
-    return (
-        handover.get("active_ip")
-        or getattr(settings, "ROUTER_PRIMARY_LINK_IP", settings.ROUTER_IP)
-    )
+    return settings.ROUTER_IP
 
 
 def ssh_device_registry(snapshot: dict | None = None) -> dict:

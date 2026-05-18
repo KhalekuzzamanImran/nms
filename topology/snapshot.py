@@ -8,6 +8,7 @@ from .snmp import (
     discover_router_switch_ports,
     discover_switch_port_for_laptop,
     fallback_discover_access_port,
+    find_interface_index_by_name,
     is_link_up,
     poll_device,
     poll_host_metrics,
@@ -282,14 +283,33 @@ def build_router_uplink(
     ip: str,
     gateway_ip: str | None,
     community: str,
+    router_management_ip: str,
+    interface_name: str,
 ) -> dict:
-    probe = poll_management_endpoint(ip, community)
+    probe = poll_management_endpoint(router_management_ip, community)
+    interface_index = find_interface_index_by_name(
+        router_management_ip,
+        community,
+        [interface_name],
+    )
+    interface = (
+        poll_link_side(router_management_ip, community, interface_index)
+        if interface_index is not None and probe.get("status") == "up"
+        else empty_link_side()
+    )
     ping = poll_ping(ip)
     gateway_ping = poll_ping(gateway_ip) if gateway_ip else empty_ping_metrics()
     management_up = probe.get("status") == "up"
-    router_reachability_up = management_up or _ping_reachable(ping)
+    interface_up = is_link_up(interface)
+    public_ip_up = _ping_reachable(ping)
     gateway_up = _ping_reachable(gateway_ping) if gateway_ip else True
-    link_up = management_up and gateway_up
+    link_up = management_up and interface_up and gateway_up
+
+    error = None
+    if not management_up:
+        error = probe.get("error")
+    elif interface_index is None:
+        error = f'Router interface "{interface_name}" was not found by SNMP.'
 
     return {
         "role": role,
@@ -297,12 +317,17 @@ def build_router_uplink(
         "ip": ip,
         "gateway_ip": gateway_ip,
         "status": "up" if link_up else "down",
+        "router_management_ip": router_management_ip,
+        "interface_name": interface_name,
+        "interface_index": interface_index,
+        "interface_status": "up" if interface_up else "down",
+        "interface": interface,
         "management_status": "up" if management_up else "down",
-        "reachability_status": "up" if router_reachability_up else "down",
+        "reachability_status": "up" if public_ip_up else "down",
         "gateway_status": "up" if gateway_up else "down",
         "active": False,
         "device_name": probe.get("name"),
-        "error": probe.get("error"),
+        "error": error,
         "ping": ping,
         "gateway_ping": gateway_ping,
     }
@@ -315,7 +340,7 @@ def select_router_uplink(primary: dict, secondary: dict) -> tuple[dict, dict]:
             "active_ip": primary.get("ip"),
             "active_gateway_ip": primary.get("gateway_ip"),
             "state": "primary_active",
-            "reason": "Primary router WAN and gateway are reachable.",
+            "reason": "Primary router interface and gateway are reachable.",
         }
 
     if secondary.get("status") == "up":
@@ -324,7 +349,7 @@ def select_router_uplink(primary: dict, secondary: dict) -> tuple[dict, dict]:
             "active_ip": secondary.get("ip"),
             "active_gateway_ip": secondary.get("gateway_ip"),
             "state": "secondary_handover",
-            "reason": "Primary link is down; secondary router WAN and gateway have taken handover.",
+            "reason": "Primary link is down; secondary router interface and gateway have taken handover.",
         }
 
     return primary, {
@@ -332,7 +357,7 @@ def select_router_uplink(primary: dict, secondary: dict) -> tuple[dict, dict]:
         "active_ip": None,
         "active_gateway_ip": None,
         "state": "all_links_down",
-        "reason": "Primary and secondary router WAN or gateway checks are down.",
+        "reason": "Primary and secondary router interface or gateway checks are down.",
     }
 
 
@@ -377,18 +402,22 @@ def build_topology_snapshot() -> dict:
         settings.ROUTER_PRIMARY_LINK_IP,
         getattr(settings, "ROUTER_PRIMARY_GATEWAY_IP", None),
         community,
+        settings.ROUTER_IP,
+        getattr(settings, "ROUTER_PRIMARY_INTERFACE_NAME", "WAN1"),
     )
     secondary_router_link = build_router_uplink(
         "secondary",
         settings.ROUTER_SECONDARY_LINK_IP,
         getattr(settings, "ROUTER_SECONDARY_GATEWAY_IP", None),
         community,
+        settings.ROUTER_IP,
+        getattr(settings, "ROUTER_SECONDARY_INTERFACE_NAME", "WAN2"),
     )
     active_router_link, handover = select_router_uplink(
         primary_router_link,
         secondary_router_link,
     )
-    active_router_ip = active_router_link.get("ip") or settings.ROUTER_PRIMARY_LINK_IP
+    active_router_ip = settings.ROUTER_IP
     primary_router_link["active"] = handover.get("active") == "primary"
     secondary_router_link["active"] = handover.get("active") == "secondary"
 
@@ -401,10 +430,13 @@ def build_topology_snapshot() -> dict:
         "active_link": handover.get("active"),
         "active_ip": handover.get("active_ip"),
         "active_gateway_ip": handover.get("active_gateway_ip"),
+        "management_ip": active_router_ip,
         "primary_ip": primary_router_link.get("ip"),
         "primary_gateway_ip": primary_router_link.get("gateway_ip"),
+        "primary_interface_name": primary_router_link.get("interface_name"),
         "secondary_ip": secondary_router_link.get("ip"),
         "secondary_gateway_ip": secondary_router_link.get("gateway_ip"),
+        "secondary_interface_name": secondary_router_link.get("interface_name"),
         "handover_state": handover.get("state"),
         "handover_reason": handover.get("reason"),
     }
@@ -496,6 +528,7 @@ def build_topology_snapshot() -> dict:
     )
 
     router_to_server_port_index = None
+    router_to_server_discovery_method = "none"
     if (
         getattr(settings, "AUTO_DISCOVER_SERVER_ROUTER_PORT", False)
         and router["status"] == "up"
@@ -506,6 +539,17 @@ def build_topology_snapshot() -> dict:
             settings.SERVER_IP,
             community,
         )
+        if router_to_server_port_index is not None:
+            router_to_server_discovery_method = "router_arp_table"
+
+        if router_to_server_port_index is None:
+            router_to_server_port_index = find_interface_index_by_name(
+                active_router_ip,
+                community,
+                [getattr(settings, "ROUTER_TO_SERVER_ROUTER_INTERFACE_NAME", "LAN")],
+            )
+            if router_to_server_port_index is not None:
+                router_to_server_discovery_method = "configured_router_interface"
 
     router_to_server_router_side = (
         poll_link_side(active_router_ip, community, router_to_server_port_index)
@@ -589,9 +633,7 @@ def build_topology_snapshot() -> dict:
                 "router_side": router_to_server_router_side,
                 "server_ip": settings.SERVER_IP,
                 "discovered_port_index": router_to_server_port_index,
-                "discovery_method": (
-                    "router_arp_table" if router_to_server_port_index is not None else "none"
-                ),
+                "discovery_method": router_to_server_discovery_method,
             },
             "primary_router_link": {
                 "status": primary_router_link["status"],

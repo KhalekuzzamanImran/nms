@@ -272,6 +272,16 @@ def _interface_index_by_text(
             return normalized_to_index[normalized]
     return None
 
+def find_interface_index_by_name(
+    ip: str,
+    community: str,
+    candidates: List[Optional[str]],
+) -> Optional[int]:
+    return _interface_index_by_text(
+        _interface_text_maps(ip, community),
+        candidates,
+    )
+
 def resolve_lldp_local_port_to_ifindex(
     ip: str,
     community: str,

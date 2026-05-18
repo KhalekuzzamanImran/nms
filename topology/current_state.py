@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from django.conf import settings
 
-SNAPSHOT_SCHEMA_VERSION = 5
+SNAPSHOT_SCHEMA_VERSION = 6
 
 
 def snapshot_path():
@@ -67,6 +67,10 @@ def build_status_payload(snapshot: dict, captured_at: str | None = None) -> dict
                 "active": uplinks.get("primary", {}).get("active"),
                 "ip": uplinks.get("primary", {}).get("ip"),
                 "gateway_ip": uplinks.get("primary", {}).get("gateway_ip"),
+                "router_management_ip": uplinks.get("primary", {}).get("router_management_ip"),
+                "interface_name": uplinks.get("primary", {}).get("interface_name"),
+                "interface_index": uplinks.get("primary", {}).get("interface_index"),
+                "interface_status": uplinks.get("primary", {}).get("interface_status"),
                 "management_status": uplinks.get("primary", {}).get("management_status"),
                 "reachability_status": uplinks.get("primary", {}).get("reachability_status"),
                 "gateway_status": uplinks.get("primary", {}).get("gateway_status"),
@@ -78,6 +82,10 @@ def build_status_payload(snapshot: dict, captured_at: str | None = None) -> dict
                 "active": uplinks.get("secondary", {}).get("active"),
                 "ip": uplinks.get("secondary", {}).get("ip"),
                 "gateway_ip": uplinks.get("secondary", {}).get("gateway_ip"),
+                "router_management_ip": uplinks.get("secondary", {}).get("router_management_ip"),
+                "interface_name": uplinks.get("secondary", {}).get("interface_name"),
+                "interface_index": uplinks.get("secondary", {}).get("interface_index"),
+                "interface_status": uplinks.get("secondary", {}).get("interface_status"),
                 "management_status": uplinks.get("secondary", {}).get("management_status"),
                 "reachability_status": uplinks.get("secondary", {}).get("reachability_status"),
                 "gateway_status": uplinks.get("secondary", {}).get("gateway_status"),

@@ -9,18 +9,24 @@ This stack runs:
 
 ## Router Handover
 
-The router is monitored through two WAN management paths:
+The router itself is monitored through the stable VPN/LAN management IP:
+
+- Router management IP: `ROUTER_IP` (`10.10.10.1` by default)
+
+The WAN links are monitored separately:
 
 - Primary router WAN: `ROUTER_PRIMARY_LINK_IP` (`103.4.116.146` by default)
+- Primary RouterOS interface: `ROUTER_PRIMARY_INTERFACE_NAME` (`WAN1` by default)
 - Primary ISP gateway: `ROUTER_PRIMARY_GATEWAY_IP` (`103.4.116.145` by default)
 - Secondary router WAN: `ROUTER_SECONDARY_LINK_IP` (`202.51.186.226` by default)
+- Secondary RouterOS interface: `ROUTER_SECONDARY_INTERFACE_NAME` (`WAN2` by default)
 - Secondary ISP gateway: `ROUTER_SECONDARY_GATEWAY_IP` (`202.51.186.225` by default)
 
-The poller prefers the primary link while the router WAN answers SNMP and its
-ISP gateway answers ping. If either primary check fails, router polling and
-router SSH hand over to the secondary router WAN when its SNMP and gateway
-checks are up. When the primary checks recover, it becomes the active path
-again.
+The poller uses SNMP over the VPN/LAN management IP to read the WAN interface
+state. It prefers the primary link while the primary RouterOS interface is up
+and the primary ISP gateway answers ping. If either primary check fails, the
+handover state changes to secondary when the secondary interface and gateway are
+up. Router polling and router SSH continue to use `ROUTER_IP`.
 
 ## Link Discovery
 
@@ -30,6 +36,11 @@ Router-to-switch port detection is automatic. The poller tries, in order:
 2. Bridge MAC forwarding table lookup
 3. Active physical port traffic/status heuristic
 4. The configured fallback indexes in `config/settings.py`
+
+Router-to-server detection first uses the router ARP table for `SERVER_IP`.
+If that ARP entry is not present but the server itself is up, the poller falls
+back to `ROUTER_TO_SERVER_ROUTER_INTERFACE_NAME` (`LAN` by default). This avoids
+showing the server link as down just because the router ARP cache expired.
 
 For the most accurate router-to-switch mapping, enable LLDP or CDP on both
 devices and allow SNMP read access to the neighbor tables. Without LLDP/CDP, the
@@ -66,6 +77,6 @@ docker compose up --build
 
 ## Notes
 
-- For SSH and SNMP to work from containers, the containers must have network reachability to your actual router primary/secondary WAN IPs, ISP gateways, switch, laptop, and server.
+- For SSH and SNMP to work from containers, the containers must have VPN/LAN reachability to `ROUTER_IP`, switch, laptop, and server. WAN link status also needs reachability to the ISP gateway probe IPs.
 - The current `docker-compose.yml` uses the same device IPs already configured in the project. Override them with environment variables if needed.
 - The server-side SNMP `extend` setup for `server_metrics` must already be installed on the Ubuntu server for server CPU/memory/disk/network metrics to appear.

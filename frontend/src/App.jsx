@@ -1468,13 +1468,21 @@ function UplinkCard({ title, link }) {
                 <strong>ISP gateway:</strong> {link?.gateway_ip || "-"}
             </div>
             <div>
-                <strong>SNMP:</strong> {link?.management_status || "-"}
+                <strong>Router interface:</strong>{" "}
+                {link?.interface_name || "-"} ({link?.interface_status || "-"})
+            </div>
+            <div>
+                <strong>Management IP:</strong>{" "}
+                {link?.router_management_ip || "-"}
+            </div>
+            <div>
+                <strong>VPN SNMP:</strong> {link?.management_status || "-"}
             </div>
             <div>
                 <strong>Gateway:</strong> {link?.gateway_status || "-"}
             </div>
             <div>
-                <strong>Reachability:</strong>{" "}
+                <strong>WAN IP ping:</strong>{" "}
                 {link?.reachability_status || "-"}
             </div>
             <div>
@@ -1522,7 +1530,7 @@ function HandoverPanel({ uplinks }) {
                     {formatUplinkState(handover.state)}
                 </div>
                 <div>
-                    <strong>Active IP:</strong> {handover.active_ip || "-"}
+                    <strong>Active WAN IP:</strong> {handover.active_ip || "-"}
                 </div>
                 <div>
                     <strong>Active gateway:</strong>{" "}
